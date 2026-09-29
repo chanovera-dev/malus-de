@@ -162,7 +162,7 @@ pub fn run_winit() -> Result<()> {
         // Renderizado del frame
         {
             if let Ok((renderer, mut framebuffer)) = backend.bind() {
-                let elements = state
+                let mut elements = state
                     .xdg_shell_state
                     .toplevel_surfaces()
                     .iter()
@@ -178,6 +178,21 @@ pub fn run_winit() -> Result<()> {
                     })
                     .collect::<Vec<WaylandSurfaceRenderElement<GlesRenderer>>>();
 
+                // Agregar superficies Layer Shell (Top Bar, Dock, etc.)
+                let layer_map = smithay::desktop::layer_map_for_output(&output);
+                for layer in layer_map.layers() {
+                    if let Some(geo) = layer_map.layer_geometry(layer) {
+                        elements.extend(render_elements_from_surface_tree(
+                            renderer,
+                            layer.wl_surface(),
+                            (geo.loc.x, geo.loc.y),
+                            1.0,
+                            1.0,
+                            Kind::Unspecified,
+                        ));
+                    }
+                }
+
                 if let Ok(mut frame) = renderer.render(&mut framebuffer, size, Transform::Normal) {
                     let _ = frame.clear(dark_acrylic, &[damage]);
                     let _ = draw_render_elements(&mut frame, 1.0, &elements, &[damage]);
@@ -188,6 +203,13 @@ pub fn run_winit() -> Result<()> {
 
         for surface in state.xdg_shell_state.toplevel_surfaces() {
             send_frames_surface_tree(surface.wl_surface(), start_time.elapsed().as_millis() as u32);
+        }
+
+        {
+            let layer_map = smithay::desktop::layer_map_for_output(&output);
+            for layer in layer_map.layers() {
+                send_frames_surface_tree(layer.wl_surface(), start_time.elapsed().as_millis() as u32);
+            }
         }
 
         // Aceptar nuevos clientes de forma no bloqueante

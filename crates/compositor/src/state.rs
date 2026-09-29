@@ -1,12 +1,15 @@
 use std::os::unix::io::OwnedFd;
 use smithay::{
-    delegate_compositor, delegate_data_device, delegate_output, delegate_seat, delegate_shm,
-    delegate_xdg_shell,
-    desktop::Space,
+    delegate_compositor, delegate_data_device, delegate_layer_shell, delegate_output,
+    delegate_seat, delegate_shm, delegate_xdg_shell,
+    desktop::{layer_map_for_output, Space},
     input::{Seat, SeatHandler, SeatState},
+    output::Output,
     reexports::wayland_server::{
         backend::{ClientData, ClientId, DisconnectReason},
-        protocol::{wl_buffer::WlBuffer, wl_seat::WlSeat, wl_surface::WlSurface},
+        protocol::{
+            wl_buffer::WlBuffer, wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface,
+        },
         Client, Display, DisplayHandle,
     },
     utils::Serial,
@@ -20,8 +23,13 @@ use smithay::{
             },
             SelectionHandler,
         },
-        shell::xdg::{
-            PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
+        shell::{
+            wlr_layer::{
+                Layer, LayerSurface, WlrLayerShellHandler, WlrLayerShellState,
+            },
+            xdg::{
+                PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
+            },
         },
         shm::{ShmHandler, ShmState},
     },
@@ -41,6 +49,7 @@ pub struct MalusState {
     pub display_handle: DisplayHandle,
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
+    pub layer_shell_state: WlrLayerShellState,
     pub shm_state: ShmState,
     pub seat_state: SeatState<MalusState>,
     pub data_device_state: DataDeviceState,
@@ -55,6 +64,7 @@ impl MalusState {
         let dh = display.handle();
         let compositor_state = CompositorState::new::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
+        let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
         let shm_state = ShmState::new::<Self>(&dh, vec![]);
         let mut seat_state = SeatState::new();
         let seat = seat_state.new_wl_seat(&dh, "malus-seat-0");
@@ -64,6 +74,7 @@ impl MalusState {
             display_handle: dh,
             compositor_state,
             xdg_shell_state,
+            layer_shell_state,
             shm_state,
             seat_state,
             data_device_state,
@@ -80,6 +91,7 @@ delegate_compositor!(MalusState);
 delegate_shm!(MalusState);
 delegate_seat!(MalusState);
 delegate_xdg_shell!(MalusState);
+delegate_layer_shell!(MalusState);
 delegate_output!(MalusState);
 delegate_data_device!(MalusState);
 
@@ -160,5 +172,32 @@ impl XdgShellHandler for MalusState {
         _positioner: PositionerState,
         _token: u32,
     ) {
+    }
+}
+
+impl WlrLayerShellHandler for MalusState {
+    fn shell_state(&mut self) -> &mut WlrLayerShellState {
+        &mut self.layer_shell_state
+    }
+
+    fn new_layer_surface(
+        &mut self,
+        surface: LayerSurface,
+        output: Option<WlOutput>,
+        _layer: Layer,
+        namespace: String,
+    ) {
+        tracing::info!("✨ Nueva Layer Surface recibida: namespace={}", namespace);
+        let output = output
+            .as_ref()
+            .and_then(Output::from_resource)
+            .or_else(|| self.space.outputs().next().cloned());
+
+        if let Some(output) = output {
+            let desktop_surface = smithay::desktop::LayerSurface::new(surface.clone(), namespace);
+            let mut map = layer_map_for_output(&output);
+            let _ = map.map_layer(&desktop_surface);
+        }
+        surface.send_configure();
     }
 }
