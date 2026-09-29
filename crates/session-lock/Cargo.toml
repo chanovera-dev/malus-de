@@ -1,0 +1,17 @@
+[package]
+name = "malus-de-session-lock"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+malus-de-common.workspace = true
+gtk4.workspace = true
+libadwaita.workspace = true
+wayland-protocols-misc.workspace = true
+zbus.workspace = true
+glib.workspace = true
+gio.workspace = true
+tracing.workspace = true
+anyhow.workspace = true

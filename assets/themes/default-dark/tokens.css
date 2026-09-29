@@ -1,0 +1,18 @@
+/* Malus DE - Design Tokens (Tema Oscuro Predeterminado) */
+:root {
+    --bg-primary: rgba(24, 24, 27, 0.85);
+    --bg-surface: rgba(39, 39, 42, 0.75);
+    --acrylic-bg: rgba(24, 24, 27, 0.70);
+    --acrylic-border: rgba(255, 255, 255, 0.18);
+    --acrylic-shadow: rgba(0, 0, 0, 0.45);
+    
+    --text-primary: #f4f4f5;
+    --text-secondary: #a1a1aa;
+    --text-muted: #71717a;
+    
+    --accent-color: #007aff;
+    --accent-glow: rgba(0, 122, 255, 0.35);
+    
+    --squircle-radius: 24px;
+    --border-width: 1px;
+}

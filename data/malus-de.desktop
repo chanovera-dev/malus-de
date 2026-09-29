@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Malus DE
+Comment=Entorno de Escritorio Wayland estilo macOS
+Exec=malus-de-session
+Type=Application
+DesktopNames=MalusDE:GNOME
+Keywords=Wayland;Desktop;macOS;GTK4;Smithay;

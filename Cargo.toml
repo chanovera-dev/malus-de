@@ -1,0 +1,61 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/common",
+    "crates/compositor",
+    "crates/top-bar",
+    "crates/dock",
+    "crates/spotlight",
+    "crates/notifications",
+    "crates/session-lock",
+    "crates/screenshot",
+    "crates/link",
+    "crates/wallpaper",
+    "crates/ctl",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["MalusDE Team"]
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Dependencias internas del Workspace
+malus-de-common = { path = "crates/common" }
+
+# GUI & Shell
+gtk4 = { version = "0.9", features = ["v4_12"] }
+libadwaita = { version = "0.7", features = ["v1_5"] }
+gtk4-layer-shell = "0.4"
+
+# Wayland Compositor & Smithay
+smithay = { version = "0.3", default-features = false, features = ["backend_winit", "backend_drm", "renderer_glow", "desktop", "wayland_frontend", "xwayland"] }
+wayland-server = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "server"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client", "server"] }
+wayland-protocols-misc = { version = "0.3", features = ["client", "staging"] }
+
+# D-Bus & Ecosistema GNOME
+zbus = { version = "4.2", default-features = false, features = ["async-io"] }
+glib = "0.20"
+gio = "0.20"
+
+# Serialización & Configuración
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Utilidades & Rendimiento
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Optimizaciones globales de compilación para Release
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true

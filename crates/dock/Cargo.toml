@@ -1,0 +1,16 @@
+[package]
+name = "malus-de-dock"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+malus-de-common.workspace = true
+gtk4.workspace = true
+libadwaita.workspace = true
+gtk4-layer-shell.workspace = true
+glib.workspace = true
+gio.workspace = true
+tracing.workspace = true
+anyhow.workspace = true

@@ -1,0 +1,38 @@
+/* Malus DE - Estilos y Tokens Declarativos del Dock */
+@import url("tokens.css");
+
+:root {
+    --dock-position: bottom;
+    --dock-style: floating;
+    --dock-bg: rgba(24, 24, 27, 0.70);
+    --dock-blur-radius: 24px;
+    --dock-border-radius: 24px;
+    --dock-floating-gap: 12px;
+    --dock-item-spacing: 8px;
+    --dock-padding: 8px;
+    --dock-border: 1px solid rgba(255, 255, 255, 0.18);
+    --dock-indicator-style: dot;
+    --dock-indicator-color: var(--accent-color);
+}
+
+.dock-pill {
+    background-color: var(--dock-bg);
+    border-radius: var(--dock-border-radius);
+    border: var(--dock-border);
+    padding: var(--dock-padding);
+    box-shadow: 0 10px 30px var(--acrylic-shadow);
+}
+
+.dock-item {
+    margin: 0 var(--dock-item-spacing);
+    transition: transform 120ms cubic-bezier(0.2, 0.9, 0.3, 1.0);
+}
+
+.dock-indicator-dot {
+    width: 4px;
+    height: 4px;
+    background-color: var(--dock-indicator-color);
+    border-radius: 50%;
+    margin-top: 3px;
+    box-shadow: 0 0 6px var(--accent-glow);
+}

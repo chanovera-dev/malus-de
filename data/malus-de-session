@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Script de inicio de sesión de usuario para Malus DE
+set -e
+
+export XDG_CURRENT_DESKTOP="MalusDE:GNOME"
+export XDG_SESSION_DESKTOP="malus-de"
+export XDG_SESSION_TYPE="wayland"
+export GDK_BACKEND="wayland"
+export QT_QPA_PLATFORM="wayland"
+export MOZ_ENABLE_WAYLAND=1
+
+# Configuración inicial de GSettings para botones semáforo a la izquierda estilo macOS
+gsettings set org.gnome.desktop.wm.preferences button-layout "close,minimize,maximize:" || true
+
+# Arrancar el compositor Smithay nativo
+exec malus-de-compositor --backend drm
