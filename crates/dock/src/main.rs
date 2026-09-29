@@ -96,8 +96,8 @@ const PINNED_APPS: &[DockAppDef] = &[
     DockAppDef {
         name: "Terminal",
         icon: "utilities-terminal",
-        command: "gnome-terminal",
-        is_running: true,
+        command: "ptyxis",
+        is_running: false,
     },
     DockAppDef {
         name: "Editor de Texto",

@@ -6,7 +6,8 @@ use anyhow::{Context, Result};
 use smithay::{
     backend::{
         input::{
-            AbsolutePositionEvent, Event, InputEvent, KeyboardKeyEvent, PointerButtonEvent,
+            AbsolutePositionEvent, ButtonState, Event, InputEvent, KeyState, KeyboardKeyEvent,
+            PointerButtonEvent,
         },
         renderer::{
             gles::GlesRenderer,
@@ -115,6 +116,7 @@ pub fn run_winit() -> Result<()> {
     let dark_acrylic = Color32F::new(0.094, 0.094, 0.106, 1.0);
     let start_time = Instant::now();
     let mut clients = Vec::new();
+    let mut super_pressed = false;
 
     while state.is_running {
         let status = winit_event_loop.dispatch_new_events(|event| match event {
@@ -132,6 +134,10 @@ pub fn run_winit() -> Result<()> {
             }
             WinitEvent::Input(event) => match event {
                 InputEvent::Keyboard { event } => {
+                    let key = event.key_code().raw();
+                    if key == 125 || key == 126 {
+                        super_pressed = event.state() == KeyState::Pressed;
+                    }
                     keyboard.input::<(), _>(
                         &mut state,
                         event.key_code(),
@@ -146,39 +152,7 @@ pub fn run_winit() -> Result<()> {
                     let point = event.position_transformed(output_geo.size);
                     let serial = SERIAL_COUNTER.next_serial();
 
-                    let layer_map = smithay::desktop::layer_map_for_output(&output);
-                    let under_layer = layer_map.layer_under(Layer::Top, point)
-                        .or_else(|| layer_map.layer_under(Layer::Overlay, point));
-
-                    if let Some(layer) = under_layer {
-                        if let Some(geo) = layer_map.layer_geometry(layer) {
-                            let local_point = point - geo.loc.to_f64();
-                            pointer.motion(
-                                &mut state,
-                                Some((layer.wl_surface().clone(), local_point)),
-                                &MotionEvent {
-                                    location: point,
-                                    serial,
-                                    time: event.time_msec(),
-                                },
-                            );
-                        }
-                    } else if let Some((window, loc)) = state.space.element_under(point) {
-                        let local_point = point - loc.to_f64();
-                        if let Some(surface) = window.wl_surface() {
-                            let surface = surface.into_owned();
-                            keyboard.set_focus(&mut state, Some(surface.clone()), serial);
-                            pointer.motion(
-                                &mut state,
-                                Some((surface, local_point)),
-                                &MotionEvent {
-                                    location: point,
-                                    serial,
-                                    time: event.time_msec(),
-                                },
-                            );
-                        }
-                    } else {
+                    if pointer.is_grabbed() {
                         pointer.motion(
                             &mut state,
                             None,
@@ -188,10 +162,85 @@ pub fn run_winit() -> Result<()> {
                                 time: event.time_msec(),
                             },
                         );
+                    } else {
+                        let layer_map = smithay::desktop::layer_map_for_output(&output);
+                        let under_layer = layer_map.layer_under(Layer::Top, point)
+                            .or_else(|| layer_map.layer_under(Layer::Overlay, point));
+
+                        if let Some(layer) = under_layer {
+                            if let Some(geo) = layer_map.layer_geometry(layer) {
+                                let local_point = point - geo.loc.to_f64();
+                                let (surf, sub_loc) = layer
+                                    .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                                    .unwrap_or_else(|| (layer.wl_surface().clone(), local_point.to_i32_round()));
+                                pointer.motion(
+                                    &mut state,
+                                    Some((surf, sub_loc.to_f64())),
+                                    &MotionEvent {
+                                        location: point,
+                                        serial,
+                                        time: event.time_msec(),
+                                    },
+                                );
+                            }
+                        } else if let Some((window, loc)) = state.space.element_under(point) {
+                            let local_point = point - loc.to_f64();
+                            let focus = window
+                                .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                                .map(|(surf, sub_loc)| (surf, sub_loc.to_f64()));
+                            pointer.motion(
+                                &mut state,
+                                focus,
+                                &MotionEvent {
+                                    location: point,
+                                    serial,
+                                    time: event.time_msec(),
+                                },
+                            );
+                        } else {
+                            pointer.motion(
+                                &mut state,
+                                None,
+                                &MotionEvent {
+                                    location: point,
+                                    serial,
+                                    time: event.time_msec(),
+                                },
+                            );
+                        }
                     }
                 }
                 InputEvent::PointerButton { event } => {
                     let serial = SERIAL_COUNTER.next_serial();
+                    let is_pressed = event.state() == ButtonState::Pressed;
+                    let point = pointer.current_location();
+
+                    if is_pressed {
+                        if let Some((window, _loc)) = state.space.element_under(point) {
+                            let window = window.clone();
+                            state.space.raise_element(&window, true);
+                            if let Some(surface) = window.wl_surface() {
+                                keyboard.set_focus(&mut state, Some(surface.into_owned()), serial);
+                            }
+
+                            // Si Super está presionado y es clic izquierdo (0x110 = BTN_LEFT): arrastrar ventana inmediatamente
+                            if super_pressed && event.button_code() == 0x110 {
+                                let initial_window_location = state.space.element_location(&window).unwrap_or_default();
+                                let start_data = smithay::input::pointer::GrabStartData {
+                                    focus: None,
+                                    button: event.button_code(),
+                                    location: point,
+                                };
+                                let grab = crate::grabs::MoveSurfaceGrab {
+                                    start_data,
+                                    window: window.clone(),
+                                    initial_window_location,
+                                };
+                                pointer.set_grab(&mut state, grab, serial, smithay::input::pointer::Focus::Clear);
+                            }
+                        }
+                    }
+
                     pointer.button(
                         &mut state,
                         &ButtonEvent {

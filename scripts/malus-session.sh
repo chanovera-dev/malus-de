@@ -42,6 +42,11 @@ echo "🔔 [5/5] Iniciando Servidor de Notificaciones D-Bus..."
 "$BIN_DIR/malus-de-notifications" &
 NOTIF_PID=$!
 
+# 6. Iniciar Aplicación de prueba (Calculadora GNOME)
+echo "🧮 Lanzando ventana de prueba (gnome-calculator)..."
+gnome-calculator &
+CALC_PID=$!
+
 echo "============================================================"
 echo "✨ ENTORNO DE ESCRITORIO MALUS DE EN EJECUCIÓN"
 echo "   Socket activo: WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
@@ -51,6 +56,7 @@ echo "============================================================"
 cleanup() {
     echo ""
     echo "🛑 Cerrando sesión de Malus DE..."
+    kill "$CALC_PID" 2>/dev/null || true
     kill "$NOTIF_PID" 2>/dev/null || true
     kill "$DOCK_PID" 2>/dev/null || true
     kill "$TOPBAR_PID" 2>/dev/null || true

@@ -85,6 +85,13 @@ impl MalusState {
             is_running: true,
         }
     }
+
+    pub fn window_for_surface(&self, surface: &WlSurface) -> Option<smithay::desktop::Window> {
+        self.space
+            .elements()
+            .find(|window| window.wl_surface().as_deref() == Some(surface))
+            .cloned()
+    }
 }
 
 // Delegaciones de protocolos de Smithay
@@ -197,6 +204,31 @@ impl XdgShellHandler for MalusState {
     fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {}
 
     fn grab(&mut self, _surface: PopupSurface, _seat: WlSeat, _serial: Serial) {}
+
+    fn move_request(&mut self, surface: ToplevelSurface, seat: WlSeat, serial: Serial) {
+        let seat: Seat<Self> = Seat::from_resource(&seat).unwrap();
+        let pointer = seat.get_pointer().unwrap();
+
+        if !pointer.has_grab(serial) {
+            return;
+        }
+
+        let start_data = pointer.grab_start_data().unwrap();
+        let Some(window) = self.window_for_surface(surface.wl_surface()) else {
+            return;
+        };
+
+        let initial_window_location = self.space.element_location(&window).unwrap_or_default();
+
+        let grab = crate::grabs::MoveSurfaceGrab {
+            start_data,
+            window: window.clone(),
+            initial_window_location,
+        };
+
+        self.space.raise_element(&window, true);
+        pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);
+    }
 
     fn reposition_request(
         &mut self,
