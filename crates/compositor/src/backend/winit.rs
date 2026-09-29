@@ -18,7 +18,7 @@ use smithay::{
     },
     desktop::space::space_render_elements,
     input::{
-        keyboard::FilterResult,
+        keyboard::{keysyms, FilterResult},
         pointer::{ButtonEvent, MotionEvent},
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
@@ -117,6 +117,8 @@ pub fn run_winit() -> Result<()> {
     let start_time = Instant::now();
     let mut clients = Vec::new();
     let mut super_pressed = false;
+    let mut alt_pressed = false;
+    let mut ctrl_pressed = false;
 
     while state.is_running {
         let status = winit_event_loop.dispatch_new_events(|event| match event {
@@ -135,26 +137,54 @@ pub fn run_winit() -> Result<()> {
             WinitEvent::Input(event) => match event {
                 InputEvent::Keyboard { event } => {
                     let key = event.key_code().raw();
+                    let is_pressed = event.state() == KeyState::Pressed;
+
                     // 125/126 (evdev KEY_LEFTMETA/KEY_RIGHTMETA), 133/134 (XKB keycode = evdev + 8)
                     if key == 125 || key == 126 || key == 133 || key == 134 {
-                        super_pressed = event.state() == KeyState::Pressed;
+                        super_pressed = is_pressed;
                         info!("Teclado: Super tecla estado = {}", super_pressed);
                     }
-
-                    // Atajo Super + Espacio (evdev 57, XKB 65): Alternar Spotlight
-                    if super_pressed && (key == 57 || key == 65) && event.state() == KeyState::Pressed {
-                        info!("🔍 Atajo Super + Espacio detectado: alternando Spotlight...");
-                        toggle_spotlight(&state.socket_name);
-                        return;
+                    // 56/100 (evdev KEY_LEFTALT/KEY_RIGHTALT), 64/108 (XKB keycode = evdev + 8)
+                    if key == 56 || key == 100 || key == 64 || key == 108 {
+                        alt_pressed = is_pressed;
+                        info!("Teclado: Alt tecla estado = {}", alt_pressed);
+                    }
+                    // 29/97 (evdev KEY_LEFTCTRL/KEY_RIGHTCTRL), 37/105 (XKB keycode = evdev + 8)
+                    if key == 29 || key == 97 || key == 37 || key == 105 {
+                        ctrl_pressed = is_pressed;
+                        info!("Teclado: Ctrl tecla estado = {}", ctrl_pressed);
                     }
 
                     keyboard.input::<(), _>(
                         &mut state,
                         event.key_code(),
                         event.state(),
-                        0.into(),
-                        0,
-                        |_, _, _| FilterResult::Forward,
+                        SERIAL_COUNTER.next_serial(),
+                        event.time_msec(),
+                        |state, modifiers, keysym_handle| {
+                            if is_pressed {
+                                let sym = keysym_handle.modified_sym();
+                                let has_super = modifiers.logo || super_pressed;
+                                let has_alt = modifiers.alt || alt_pressed;
+                                let has_ctrl = modifiers.ctrl || ctrl_pressed;
+
+                                let is_space = sym == keysyms::KEY_space.into() || key == 57 || key == 65;
+                                let is_k = sym == keysyms::KEY_k.into() || sym == keysyms::KEY_K.into() || key == 45;
+
+                                // Atajos para alternar Spotlight:
+                                // 1. Super + Espacio (macOS / Malus DE nativo)
+                                // 2. Alt + Espacio (estándar PC, evita conflicto con switch-input-source de GNOME)
+                                // 3. Ctrl + Espacio (alternativa clásica de launchers)
+                                // 4. Super + K (Command Palette moderno)
+                                if (is_space && (has_super || has_alt || has_ctrl)) || (is_k && has_super) {
+                                    info!("🔍 Atajo de Spotlight detectado (Super={}, Alt={}, Ctrl={}, sym={:?}): alternando...",
+                                        has_super, has_alt, has_ctrl, sym);
+                                    toggle_spotlight(&state.socket_name);
+                                    return FilterResult::Intercept(());
+                                }
+                            }
+                            FilterResult::Forward
+                        },
                     );
                 }
                 InputEvent::PointerMotionAbsolute { event } => {
@@ -226,12 +256,13 @@ pub fn run_winit() -> Result<()> {
                     let is_pressed = event.state() == ButtonState::Pressed;
                     let point = pointer.current_location();
 
-                    if is_pressed {
-                        let layer_map = smithay::desktop::layer_map_for_output(&output);
-                        let under_layer = layer_map.layer_under(Layer::Overlay, point)
-                            .or_else(|| layer_map.layer_under(Layer::Top, point));
+                    let layer_map = smithay::desktop::layer_map_for_output(&output);
+                    let under_layer = layer_map.layer_under(Layer::Overlay, point)
+                        .or_else(|| layer_map.layer_under(Layer::Top, point));
 
+                    if is_pressed {
                         if let Some(layer) = under_layer {
+                            info!("🎯 Clic de ratón sobre layer surface: namespace={}, pos={:?}", layer.namespace(), point);
                             if let Some(geo) = layer_map.layer_geometry(layer) {
                                 let local_point = point - geo.loc.to_f64();
                                 if let Some((surf, _)) = layer.surface_under(local_point, smithay::desktop::WindowSurfaceType::all()) {
@@ -246,7 +277,8 @@ pub fn run_winit() -> Result<()> {
                             }
 
                             // Si Super está presionado y es clic izquierdo (0x110 = BTN_LEFT): arrastrar ventana inmediatamente
-                            if super_pressed && event.button_code() == 0x110 {
+                            let has_super = super_pressed || keyboard.modifier_state().logo;
+                            if has_super && event.button_code() == 0x110 {
                                 info!("🚀 Atajo Super + Clic: iniciando arrastre directo de ventana desde {:?}", loc);
                                 let initial_window_location = loc;
                                 let start_data = smithay::input::pointer::GrabStartData {
@@ -379,9 +411,13 @@ fn toggle_spotlight(socket_name: &str) {
         .unwrap_or_else(|| std::path::PathBuf::from("malus-de-spotlight"));
 
     info!("Lanzando Spotlight desde: {:?}", exe);
-    let _ = std::process::Command::new(exe)
+    match std::process::Command::new(&exe)
         .env("WAYLAND_DISPLAY", socket_name)
         .env("GDK_BACKEND", "wayland")
         .env("GSK_RENDERER", "cairo")
-        .spawn();
+        .spawn()
+    {
+        Ok(child) => info!("Spotlight lanzado con éxito, PID={}", child.id()),
+        Err(e) => tracing::error!("Error al lanzar Spotlight: {:?}", e),
+    }
 }

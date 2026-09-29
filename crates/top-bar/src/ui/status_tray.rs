@@ -41,18 +41,21 @@ pub fn create_status_tray_widget() -> GtkBox {
     // Spotlight Search (Lupa macOS)
     let spotlight_btn = Button::builder()
         .css_classes(["spotlight-pill", "topbar-btn"])
-        .tooltip_text("Búsqueda Spotlight (Super + Espacio)")
+        .tooltip_text("Búsqueda Spotlight (Alt + Espacio / Super + K)")
         .build();
     let spotlight_icon = Image::from_icon_name("system-search-symbolic");
     spotlight_btn.set_child(Some(&spotlight_icon));
     spotlight_btn.connect_clicked(|_| {
-        info!("Alternando Spotlight desde barra superior...");
+        let wayland_display = std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-1".to_string());
+        info!("Alternando Spotlight desde barra superior (WAYLAND_DISPLAY={})...", wayland_display);
+
         let output = std::process::Command::new("pkill")
             .args(["-f", "malus-de-spotlight"])
             .status();
 
         if let Ok(status) = output {
             if status.success() {
+                info!("Spotlight existente cerrado con pkill.");
                 return;
             }
         }
@@ -62,7 +65,16 @@ pub fn create_status_tray_widget() -> GtkBox {
             .and_then(|p| p.parent().map(|dir| dir.join("malus-de-spotlight")))
             .unwrap_or_else(|| std::path::PathBuf::from("malus-de-spotlight"));
 
-        let _ = std::process::Command::new(exe).spawn();
+        info!("Lanzando Spotlight: {:?}", exe);
+        match std::process::Command::new(&exe)
+            .env("WAYLAND_DISPLAY", &wayland_display)
+            .env("GDK_BACKEND", "wayland")
+            .env("GSK_RENDERER", "cairo")
+            .spawn()
+        {
+            Ok(child) => info!("Spotlight lanzado con éxito, PID={}", child.id()),
+            Err(e) => tracing::error!("Error al lanzar Spotlight: {:?}", e),
+        }
     });
     tray.append(&spotlight_btn);
 
