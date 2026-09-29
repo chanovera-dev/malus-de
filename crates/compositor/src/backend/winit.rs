@@ -140,6 +140,14 @@ pub fn run_winit() -> Result<()> {
                         super_pressed = event.state() == KeyState::Pressed;
                         info!("Teclado: Super tecla estado = {}", super_pressed);
                     }
+
+                    // Atajo Super + Espacio (evdev 57, XKB 65): Alternar Spotlight
+                    if super_pressed && (key == 57 || key == 65) && event.state() == KeyState::Pressed {
+                        info!("🔍 Atajo Super + Espacio detectado: alternando Spotlight...");
+                        toggle_spotlight(&state.socket_name);
+                        return;
+                    }
+
                     keyboard.input::<(), _>(
                         &mut state,
                         event.key_code(),
@@ -166,8 +174,8 @@ pub fn run_winit() -> Result<()> {
                         );
                     } else {
                         let layer_map = smithay::desktop::layer_map_for_output(&output);
-                        let under_layer = layer_map.layer_under(Layer::Top, point)
-                            .or_else(|| layer_map.layer_under(Layer::Overlay, point));
+                        let under_layer = layer_map.layer_under(Layer::Overlay, point)
+                            .or_else(|| layer_map.layer_under(Layer::Top, point));
 
                         if let Some(layer) = under_layer {
                             if let Some(geo) = layer_map.layer_geometry(layer) {
@@ -219,7 +227,18 @@ pub fn run_winit() -> Result<()> {
                     let point = pointer.current_location();
 
                     if is_pressed {
-                        if let Some((window, loc)) = state.space.element_under(point) {
+                        let layer_map = smithay::desktop::layer_map_for_output(&output);
+                        let under_layer = layer_map.layer_under(Layer::Overlay, point)
+                            .or_else(|| layer_map.layer_under(Layer::Top, point));
+
+                        if let Some(layer) = under_layer {
+                            if let Some(geo) = layer_map.layer_geometry(layer) {
+                                let local_point = point - geo.loc.to_f64();
+                                if let Some((surf, _)) = layer.surface_under(local_point, smithay::desktop::WindowSurfaceType::all()) {
+                                    keyboard.set_focus(&mut state, Some(surf), serial);
+                                }
+                            }
+                        } else if let Some((window, loc)) = state.space.element_under(point) {
                             let window = window.clone();
                             state.space.raise_element(&window, true);
                             if let Some(surface) = window.wl_surface() {
@@ -340,4 +359,29 @@ pub fn run_winit() -> Result<()> {
 
     info!("Compositor Malus DE finalizado limpiamente.");
     Ok(())
+}
+
+fn toggle_spotlight(socket_name: &str) {
+    let output = std::process::Command::new("pkill")
+        .args(["-f", "malus-de-spotlight"])
+        .status();
+
+    if let Ok(status) = output {
+        if status.success() {
+            info!("Spotlight cerrado por alternancia (toggle).");
+            return;
+        }
+    }
+
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|dir| dir.join("malus-de-spotlight")))
+        .unwrap_or_else(|| std::path::PathBuf::from("malus-de-spotlight"));
+
+    info!("Lanzando Spotlight desde: {:?}", exe);
+    let _ = std::process::Command::new(exe)
+        .env("WAYLAND_DISPLAY", socket_name)
+        .env("GDK_BACKEND", "wayland")
+        .env("GSK_RENDERER", "cairo")
+        .spawn();
 }

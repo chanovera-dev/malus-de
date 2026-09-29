@@ -38,6 +38,34 @@ pub fn create_status_tray_widget() -> GtkBox {
     vol_btn.set_child(Some(&vol_icon));
     tray.append(&vol_btn);
 
+    // Spotlight Search (Lupa macOS)
+    let spotlight_btn = Button::builder()
+        .css_classes(["spotlight-pill", "topbar-btn"])
+        .tooltip_text("Búsqueda Spotlight (Super + Espacio)")
+        .build();
+    let spotlight_icon = Image::from_icon_name("system-search-symbolic");
+    spotlight_btn.set_child(Some(&spotlight_icon));
+    spotlight_btn.connect_clicked(|_| {
+        info!("Alternando Spotlight desde barra superior...");
+        let output = std::process::Command::new("pkill")
+            .args(["-f", "malus-de-spotlight"])
+            .status();
+
+        if let Ok(status) = output {
+            if status.success() {
+                return;
+            }
+        }
+
+        let exe = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|dir| dir.join("malus-de-spotlight")))
+            .unwrap_or_else(|| std::path::PathBuf::from("malus-de-spotlight"));
+
+        let _ = std::process::Command::new(exe).spawn();
+    });
+    tray.append(&spotlight_btn);
+
     // Control Center (Botón de dos interruptores tipo macOS)
     let cc_btn = Button::builder()
         .css_classes(["control-center-toggle", "topbar-btn"])

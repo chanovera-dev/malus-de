@@ -121,27 +121,43 @@ impl CompositorHandler for MalusState {
         }
 
         // Si la superficie pertenece a una Layer Surface (Top Bar, Dock, Notificaciones, etc.)
-        if let Some(output) = self.space.outputs().find(|o| {
+        let outputs: Vec<_> = self.space.outputs().cloned().collect();
+        let target_output = outputs.into_iter().find(|o| {
             let map = smithay::desktop::layer_map_for_output(o);
             map.layer_for_surface(surface, smithay::desktop::WindowSurfaceType::all()).is_some()
-        }).cloned() {
-            let mut map = smithay::desktop::layer_map_for_output(&output);
-            map.arrange();
+        });
 
-            let initial_configure_sent = smithay::wayland::compositor::with_states(surface, |states| {
-                states
-                    .data_map
-                    .get::<smithay::wayland::shell::wlr_layer::LayerSurfaceData>()
-                    .map(|d| d.lock().unwrap().initial_configure_sent)
-                    .unwrap_or(false)
-            });
+        if let Some(output) = target_output {
+            let mut should_focus_overlay = false;
+            {
+                let mut map = smithay::desktop::layer_map_for_output(&output);
+                map.arrange();
 
-            tracing::info!("🔄 Commit de Layer Surface: initial_configure_sent={}", initial_configure_sent);
+                let initial_configure_sent = smithay::wayland::compositor::with_states(surface, |states| {
+                    states
+                        .data_map
+                        .get::<smithay::wayland::shell::wlr_layer::LayerSurfaceData>()
+                        .map(|d| d.lock().unwrap().initial_configure_sent)
+                        .unwrap_or(false)
+                });
 
-            if !initial_configure_sent {
+                tracing::info!("🔄 Commit de Layer Surface: initial_configure_sent={}", initial_configure_sent);
+
                 if let Some(layer) = map.layer_for_surface(surface, smithay::desktop::WindowSurfaceType::all()) {
-                    tracing::info!("📤 Enviando initial configure a layer surface");
-                    layer.layer_surface().send_configure();
+                    if !initial_configure_sent {
+                        tracing::info!("📤 Enviando initial configure a layer surface");
+                        layer.layer_surface().send_configure();
+                    }
+                    if layer.layer() == smithay::wayland::shell::wlr_layer::Layer::Overlay {
+                        should_focus_overlay = true;
+                    }
+                }
+            }
+
+            if should_focus_overlay {
+                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                if let Some(kb) = self.seat.get_keyboard() {
+                    kb.set_focus(self, Some(surface.clone()), serial);
                 }
             }
         }
@@ -278,6 +294,12 @@ impl WlrLayerShellHandler for MalusState {
             layer.map(|layer| (map, layer))
         }) {
             map.unmap_layer(&layer);
+        }
+
+        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+        if let Some(kb) = self.seat.get_keyboard() {
+            let top_win_surface = self.space.elements().next().and_then(|w| w.wl_surface().map(|s| s.into_owned()));
+            kb.set_focus(self, top_win_surface, serial);
         }
     }
 }
