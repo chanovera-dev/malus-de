@@ -31,6 +31,7 @@ use smithay::{
                 PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
             },
         },
+        seat::WaylandFocus,
         shm::{ShmHandler, ShmState},
     },
 };
@@ -106,6 +107,37 @@ impl CompositorHandler for MalusState {
 
     fn commit(&mut self, surface: &WlSurface) {
         smithay::backend::renderer::utils::on_commit_buffer_handler::<Self>(surface);
+
+        // Si es una ventana regular en Space, actualizamos sus dimensiones internas
+        if let Some(window) = self.space.elements().find(|w| w.wl_surface().as_deref() == Some(surface)) {
+            window.on_commit();
+        }
+
+        // Si la superficie pertenece a una Layer Surface (Top Bar, Dock, Notificaciones, etc.)
+        if let Some(output) = self.space.outputs().find(|o| {
+            let map = smithay::desktop::layer_map_for_output(o);
+            map.layer_for_surface(surface, smithay::desktop::WindowSurfaceType::all()).is_some()
+        }).cloned() {
+            let mut map = smithay::desktop::layer_map_for_output(&output);
+            map.arrange();
+
+            let initial_configure_sent = smithay::wayland::compositor::with_states(surface, |states| {
+                states
+                    .data_map
+                    .get::<smithay::wayland::shell::wlr_layer::LayerSurfaceData>()
+                    .map(|d| d.lock().unwrap().initial_configure_sent)
+                    .unwrap_or(false)
+            });
+
+            tracing::info!("🔄 Commit de Layer Surface: initial_configure_sent={}", initial_configure_sent);
+
+            if !initial_configure_sent {
+                if let Some(layer) = map.layer_for_surface(surface, smithay::desktop::WindowSurfaceType::all()) {
+                    tracing::info!("📤 Enviando initial configure a layer surface");
+                    layer.layer_surface().send_configure();
+                }
+            }
+        }
     }
 }
 
@@ -194,10 +226,22 @@ impl WlrLayerShellHandler for MalusState {
             .or_else(|| self.space.outputs().next().cloned());
 
         if let Some(output) = output {
-            let desktop_surface = smithay::desktop::LayerSurface::new(surface.clone(), namespace);
+            let desktop_surface = smithay::desktop::LayerSurface::new(surface, namespace);
             let mut map = layer_map_for_output(&output);
             let _ = map.map_layer(&desktop_surface);
         }
-        surface.send_configure();
+    }
+
+    fn layer_destroyed(&mut self, surface: LayerSurface) {
+        if let Some((mut map, layer)) = self.space.outputs().find_map(|o| {
+            let map = layer_map_for_output(o);
+            let layer = map
+                .layers()
+                .find(|&layer| layer.layer_surface() == &surface)
+                .cloned();
+            layer.map(|layer| (map, layer))
+        }) {
+            map.unmap_layer(&layer);
+        }
     }
 }

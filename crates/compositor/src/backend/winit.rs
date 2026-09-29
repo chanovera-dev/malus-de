@@ -5,19 +5,21 @@ use std::{
 use anyhow::{Context, Result};
 use smithay::{
     backend::{
-        input::{InputEvent, KeyboardKeyEvent},
+        input::{
+            AbsolutePositionEvent, Event, InputEvent, KeyboardKeyEvent, PointerButtonEvent,
+        },
         renderer::{
-            element::{
-                surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement},
-                Kind,
-            },
             gles::GlesRenderer,
             utils::draw_render_elements,
             Color32F, Frame, Renderer,
         },
         winit::{self, WinitEvent},
     },
-    input::keyboard::FilterResult,
+    desktop::space::space_render_elements,
+    input::{
+        keyboard::FilterResult,
+        pointer::{ButtonEvent, MotionEvent},
+    },
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::{
         wayland_server::{
@@ -26,9 +28,11 @@ use smithay::{
         },
         winit::platform::pump_events::PumpStatus,
     },
-    utils::{Rectangle, Transform},
-    wayland::compositor::{
-        with_surface_tree_downward, SurfaceAttributes, TraversalAction,
+    utils::{Rectangle, Transform, SERIAL_COUNTER},
+    wayland::{
+        compositor::{with_surface_tree_downward, SurfaceAttributes, TraversalAction},
+        seat::WaylandFocus,
+        shell::wlr_layer::Layer,
     },
 };
 use tracing::{info, warn};
@@ -64,6 +68,7 @@ pub fn run_winit() -> Result<()> {
         .seat
         .add_keyboard(Default::default(), 200, 200)
         .map_err(|e| anyhow::anyhow!("Error al inicializar teclado: {e:?}"))?;
+    let pointer = state.seat.add_pointer();
 
     // Crear socket de escucha de clientes Wayland (wayland-1 .. 32)
     let listener = ListeningSocket::bind_auto("wayland", 1..33)
@@ -136,11 +141,66 @@ pub fn run_winit() -> Result<()> {
                         |_, _, _| FilterResult::Forward,
                     );
                 }
-                InputEvent::PointerMotionAbsolute { .. } => {
-                    if let Some(surface) = state.xdg_shell_state.toplevel_surfaces().iter().next().cloned() {
-                        let surface = surface.wl_surface().clone();
-                        keyboard.set_focus(&mut state, Some(surface), 0.into());
+                InputEvent::PointerMotionAbsolute { event } => {
+                    let output_geo = state.space.output_geometry(&output).unwrap_or_default();
+                    let point = event.position_transformed(output_geo.size);
+                    let serial = SERIAL_COUNTER.next_serial();
+
+                    let layer_map = smithay::desktop::layer_map_for_output(&output);
+                    let under_layer = layer_map.layer_under(Layer::Top, point)
+                        .or_else(|| layer_map.layer_under(Layer::Overlay, point));
+
+                    if let Some(layer) = under_layer {
+                        if let Some(geo) = layer_map.layer_geometry(layer) {
+                            let local_point = point - geo.loc.to_f64();
+                            pointer.motion(
+                                &mut state,
+                                Some((layer.wl_surface().clone(), local_point)),
+                                &MotionEvent {
+                                    location: point,
+                                    serial,
+                                    time: event.time_msec(),
+                                },
+                            );
+                        }
+                    } else if let Some((window, loc)) = state.space.element_under(point) {
+                        let local_point = point - loc.to_f64();
+                        if let Some(surface) = window.wl_surface() {
+                            let surface = surface.into_owned();
+                            keyboard.set_focus(&mut state, Some(surface.clone()), serial);
+                            pointer.motion(
+                                &mut state,
+                                Some((surface, local_point)),
+                                &MotionEvent {
+                                    location: point,
+                                    serial,
+                                    time: event.time_msec(),
+                                },
+                            );
+                        }
+                    } else {
+                        pointer.motion(
+                            &mut state,
+                            None,
+                            &MotionEvent {
+                                location: point,
+                                serial,
+                                time: event.time_msec(),
+                            },
+                        );
                     }
+                }
+                InputEvent::PointerButton { event } => {
+                    let serial = SERIAL_COUNTER.next_serial();
+                    pointer.button(
+                        &mut state,
+                        &ButtonEvent {
+                            serial,
+                            time: event.time_msec(),
+                            button: event.button_code(),
+                            state: event.state(),
+                        },
+                    );
                 }
                 _ => {}
             },
@@ -162,38 +222,28 @@ pub fn run_winit() -> Result<()> {
         // Renderizado del frame
         {
             if let Ok((renderer, mut framebuffer)) = backend.bind() {
-                let mut elements = state
-                    .xdg_shell_state
-                    .toplevel_surfaces()
-                    .iter()
-                    .flat_map(|surface| {
-                        render_elements_from_surface_tree(
-                            renderer,
-                            surface.wl_surface(),
-                            (0, 0),
-                            1.0,
-                            1.0,
-                            Kind::Unspecified,
-                        )
-                    })
-                    .collect::<Vec<WaylandSurfaceRenderElement<GlesRenderer>>>();
-
-                // Agregar superficies Layer Shell (Top Bar, Dock, etc.)
-                let layer_map = smithay::desktop::layer_map_for_output(&output);
-                for layer in layer_map.layers() {
-                    if let Some(geo) = layer_map.layer_geometry(layer) {
-                        elements.extend(render_elements_from_surface_tree(
-                            renderer,
-                            layer.wl_surface(),
-                            (geo.loc.x, geo.loc.y),
-                            1.0,
-                            1.0,
-                            Kind::Unspecified,
-                        ));
+                let elements = match space_render_elements::<
+                    GlesRenderer,
+                    smithay::desktop::Window,
+                    _,
+                >(renderer, [&state.space], &output, 1.0)
+                {
+                    Ok(elems) => {
+                        if !elems.is_empty() {
+                            static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                            if !ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                info!("🎨 Frame con elementos visibles renderizado: total elementos={}", elems.len());
+                            }
+                        }
+                        elems
                     }
-                }
+                    Err(err) => {
+                        warn!("Error al obtener render elements de space: {:?}", err);
+                        Vec::new()
+                    }
+                };
 
-                if let Ok(mut frame) = renderer.render(&mut framebuffer, size, Transform::Normal) {
+                if let Ok(mut frame) = renderer.render(&mut framebuffer, size, Transform::Flipped180) {
                     let _ = frame.clear(dark_acrylic, &[damage]);
                     let _ = draw_render_elements(&mut frame, 1.0, &elements, &[damage]);
                     let _ = frame.finish();

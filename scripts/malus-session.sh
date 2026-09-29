@@ -20,6 +20,7 @@ COMPOSITOR_PID=$!
 sleep 1.2
 export WAYLAND_DISPLAY="wayland-1"
 export GDK_BACKEND="wayland"
+export GSK_RENDERER="cairo"
 
 # 2. Iniciar Demonio de Fondo de Pantalla (Layer Background)
 echo "🎨 [2/5] Iniciando Fondo de Pantalla..."
