@@ -27,7 +27,6 @@ window.malus-notification-window {
     box-shadow: 0 16px 40px rgba(0, 0, 0, 0.50);
     padding: 12px 14px;
     min-width: 320px;
-    max-width: 400px;
 }
 
 .notif-header {
@@ -180,6 +179,8 @@ fn main() -> Result<()> {
             );
         }
     });
+
+    app.connect_activate(|_| {});
 
     let app_handle = app.clone();
     glib::MainContext::default().spawn_local(async move {

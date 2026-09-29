@@ -51,7 +51,7 @@ window.malus-dock-window {
 
 .dock-separator {
     background-color: rgba(255, 255, 255, 0.18);
-    width: 1px;
+    min-width: 1px;
     margin: 8px 6px;
 }
 
