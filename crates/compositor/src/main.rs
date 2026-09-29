@@ -1,3 +1,6 @@
+pub mod backend;
+pub mod state;
+
 use malus_de_common::logging::init_logging;
 use tracing::info;
 
@@ -16,11 +19,11 @@ fn main() -> anyhow::Result<()> {
     match backend {
         "winit" => {
             info!("Iniciando backend Winit para pruebas en ventana anidada...");
-            // Inicialización de bucle de eventos Smithay en ventana
+            crate::backend::winit::run_winit()?;
         }
         "drm" => {
             info!("Iniciando backend DRM/KMS nativo con soporte libinput...");
-            // Inicialización de sesión de hardware directa TTY
+            // TODO: Inicialización de sesión directa TTY en Fase 2
         }
         other => {
             eprintln!("Backend no reconocido: {other}. Usa 'winit' o 'drm'.");
