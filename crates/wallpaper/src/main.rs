@@ -1,7 +1,84 @@
+use anyhow::Result;
+use clap::Parser;
+use gtk4::prelude::*;
+use gtk4::{Application, ApplicationWindow, CssProvider, Picture};
+use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use malus_de_common::logging::init_logging;
+use std::path::PathBuf;
 use tracing::info;
 
-fn main() {
+#[derive(Parser, Debug)]
+#[command(name = "malus-de-wallpaper")]
+#[command(about = "Demonio de Fondo de Pantalla de Malus DE (Layer Shell Background)")]
+struct Args {
+    /// Ruta a la imagen de fondo de pantalla
+    #[arg(short, long)]
+    image: Option<PathBuf>,
+}
+
+const DEFAULT_GRADIENT_CSS: &str = r#"
+window.malus-wallpaper-window {
+    background: radial-gradient(circle at 35% 25%, #2e1065 0%, #172554 35%, #0f172a 70%, #09090b 100%);
+}
+"#;
+
+fn main() -> Result<()> {
     init_logging("malus_de_wallpaper");
-    info!("Iniciando Malus DE Wallpaper (Layer Shell Background)...");
+    let args = Args::parse();
+    info!("Iniciando Malus DE Wallpaper Daemon...");
+
+    let app = Application::builder()
+        .application_id("org.malus_de.Wallpaper")
+        .build();
+
+    let image_path = args.image;
+
+    app.connect_startup(|_| {
+        let provider = CssProvider::new();
+        provider.load_from_string(DEFAULT_GRADIENT_CSS);
+        if let Some(display) = gtk4::gdk::Display::default() {
+            gtk4::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+    });
+
+    app.connect_activate(move |application| {
+        let window = ApplicationWindow::builder()
+            .application(application)
+            .title("Fondo de Pantalla Malus DE")
+            .css_classes(["malus-wallpaper-window"])
+            .build();
+
+        if gtk4_layer_shell::is_supported() {
+            info!("Anclando Fondo de Pantalla en capa Background a pantalla completa...");
+            window.init_layer_shell();
+            window.set_layer(Layer::Background);
+            window.set_namespace("malus-wallpaper");
+            window.set_anchor(Edge::Top, true);
+            window.set_anchor(Edge::Bottom, true);
+            window.set_anchor(Edge::Left, true);
+            window.set_anchor(Edge::Right, true);
+            window.set_exclusive_zone(-1);
+        } else {
+            window.set_decorated(false);
+            window.maximize();
+        }
+
+        if let Some(ref img_path) = image_path {
+            if img_path.exists() {
+                info!("Cargando imagen de fondo: {:?}", img_path);
+                let picture = Picture::for_filename(img_path);
+                picture.set_content_fit(gtk4::ContentFit::Cover);
+                window.set_child(Some(&picture));
+            }
+        }
+
+        window.present();
+    });
+
+    app.run_with_args(&["malus-de-wallpaper"]);
+    Ok(())
 }
