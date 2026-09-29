@@ -9,7 +9,7 @@ echo "🍎 INICIANDO SESIÓN COMPLETA DE MALUS DE (MODO ANIDADO WINIT)"
 echo "============================================================"
 
 # Limpiar procesos previos si existieran
-pkill -f malus-de- || true
+killall malus-de-compositor malus-de-top-bar malus-de-dock malus-de-spotlight malus-de-wallpaper malus-de-notifications 2>/dev/null || true
 
 # 1. Iniciar Compositor Wayland Smithay
 echo "🚀 [1/5] Iniciando Compositor Wayland..."
