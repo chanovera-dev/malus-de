@@ -135,8 +135,10 @@ pub fn run_winit() -> Result<()> {
             WinitEvent::Input(event) => match event {
                 InputEvent::Keyboard { event } => {
                     let key = event.key_code().raw();
-                    if key == 125 || key == 126 {
+                    // 125/126 (evdev KEY_LEFTMETA/KEY_RIGHTMETA), 133/134 (XKB keycode = evdev + 8)
+                    if key == 125 || key == 126 || key == 133 || key == 134 {
                         super_pressed = event.state() == KeyState::Pressed;
+                        info!("Teclado: Super tecla estado = {}", super_pressed);
                     }
                     keyboard.input::<(), _>(
                         &mut state,
@@ -172,10 +174,10 @@ pub fn run_winit() -> Result<()> {
                                 let local_point = point - geo.loc.to_f64();
                                 let (surf, sub_loc) = layer
                                     .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
-                                    .unwrap_or_else(|| (layer.wl_surface().clone(), local_point.to_i32_round()));
+                                    .unwrap_or_else(|| (layer.wl_surface().clone(), (0, 0).into()));
                                 pointer.motion(
                                     &mut state,
-                                    Some((surf, sub_loc.to_f64())),
+                                    Some((surf, (geo.loc + sub_loc).to_f64())),
                                     &MotionEvent {
                                         location: point,
                                         serial,
@@ -187,7 +189,7 @@ pub fn run_winit() -> Result<()> {
                             let local_point = point - loc.to_f64();
                             let focus = window
                                 .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
-                                .map(|(surf, sub_loc)| (surf, sub_loc.to_f64()));
+                                .map(|(surf, sub_loc)| (surf, (loc + sub_loc).to_f64()));
                             pointer.motion(
                                 &mut state,
                                 focus,
@@ -209,6 +211,7 @@ pub fn run_winit() -> Result<()> {
                             );
                         }
                     }
+                    pointer.frame(&mut state);
                 }
                 InputEvent::PointerButton { event } => {
                     let serial = SERIAL_COUNTER.next_serial();
@@ -216,7 +219,7 @@ pub fn run_winit() -> Result<()> {
                     let point = pointer.current_location();
 
                     if is_pressed {
-                        if let Some((window, _loc)) = state.space.element_under(point) {
+                        if let Some((window, loc)) = state.space.element_under(point) {
                             let window = window.clone();
                             state.space.raise_element(&window, true);
                             if let Some(surface) = window.wl_surface() {
@@ -225,7 +228,8 @@ pub fn run_winit() -> Result<()> {
 
                             // Si Super está presionado y es clic izquierdo (0x110 = BTN_LEFT): arrastrar ventana inmediatamente
                             if super_pressed && event.button_code() == 0x110 {
-                                let initial_window_location = state.space.element_location(&window).unwrap_or_default();
+                                info!("🚀 Atajo Super + Clic: iniciando arrastre directo de ventana desde {:?}", loc);
+                                let initial_window_location = loc;
                                 let start_data = smithay::input::pointer::GrabStartData {
                                     focus: None,
                                     button: event.button_code(),
@@ -250,6 +254,7 @@ pub fn run_winit() -> Result<()> {
                             state: event.state(),
                         },
                     );
+                    pointer.frame(&mut state);
                 }
                 _ => {}
             },

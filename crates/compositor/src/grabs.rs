@@ -59,7 +59,7 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
     ) {
         handle.button(data, event);
         if handle.current_pressed().is_empty() {
-            // El usuario soltó el botón del ratón: finalizar el arrastre
+            tracing::info!("🛑 Soltado botón del ratón: finalizando MoveSurfaceGrab.");
             handle.unset_grab(self, data, event.serial, event.time, true);
         }
     }

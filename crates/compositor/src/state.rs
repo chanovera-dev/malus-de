@@ -206,15 +206,18 @@ impl XdgShellHandler for MalusState {
     fn grab(&mut self, _surface: PopupSurface, _seat: WlSeat, _serial: Serial) {}
 
     fn move_request(&mut self, surface: ToplevelSurface, seat: WlSeat, serial: Serial) {
+        tracing::info!("🖱️ [XdgShell] move_request recibido del cliente: serial={:?}", serial);
         let seat: Seat<Self> = Seat::from_resource(&seat).unwrap();
         let pointer = seat.get_pointer().unwrap();
 
         if !pointer.has_grab(serial) {
+            tracing::warn!("⚠️ [XdgShell] move_request ignorado: pointer no tiene grab activo con serial {:?}", serial);
             return;
         }
 
         let start_data = pointer.grab_start_data().unwrap();
         let Some(window) = self.window_for_surface(surface.wl_surface()) else {
+            tracing::warn!("⚠️ [XdgShell] move_request: no se encontró ventana para la superficie");
             return;
         };
 
@@ -228,6 +231,7 @@ impl XdgShellHandler for MalusState {
 
         self.space.raise_element(&window, true);
         pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);
+        tracing::info!("✅ [XdgShell] MoveSurfaceGrab activado exitosamente para arrastre por título!");
     }
 
     fn reposition_request(
