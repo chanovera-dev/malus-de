@@ -7,5 +7,6 @@ license.workspace = true
 
 [dependencies]
 malus-de-common.workspace = true
+clap.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
