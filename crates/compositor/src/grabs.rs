@@ -6,7 +6,7 @@ use smithay::{
         GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent,
         GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle, RelativeMotionEvent,
     },
-    utils::{Logical, Point},
+    utils::{Logical, Point, Rectangle},
 };
 
 use crate::state::MalusState;
@@ -61,6 +61,41 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
         if handle.current_pressed().is_empty() {
             tracing::info!("🛑 Soltado botón del ratón: finalizando MoveSurfaceGrab.");
             handle.unset_grab(self, data, event.serial, event.time, true);
+
+            // Detección de Aero Snap al soltar la ventana en los bordes de la pantalla
+            let snap_action = data.space.outputs().next().and_then(|output| {
+                let layer_map = smithay::desktop::layer_map_for_output(output);
+                let zone = layer_map.non_exclusive_zone();
+                let output_geo = data.space.output_geometry(output).unwrap_or_default();
+                let usable_zone = if zone.size.w > 0 && zone.size.h > 0 {
+                    zone
+                } else {
+                    Rectangle::new(
+                        (0, 32).into(),
+                        (output_geo.size.w, output_geo.size.h - 32).into(),
+                    )
+                };
+
+                let cur_loc = handle.current_location();
+                let snap_margin = 16.0;
+
+                if cur_loc.x <= (output_geo.loc.x as f64 + snap_margin) {
+                    tracing::info!("🪟 Aero Snap: cursor en borde izquierdo, acoplando a mitad izquierda");
+                    Some((crate::state::SnapMode::LeftHalf, usable_zone))
+                } else if cur_loc.x >= (output_geo.loc.x + output_geo.size.w) as f64 - snap_margin {
+                    tracing::info!("🪟 Aero Snap: cursor en borde derecho, acoplando a mitad derecha");
+                    Some((crate::state::SnapMode::RightHalf, usable_zone))
+                } else if cur_loc.y <= (output_geo.loc.y + usable_zone.loc.y) as f64 + snap_margin {
+                    tracing::info!("🪟 Aero Snap: cursor en borde superior, maximizando ventana");
+                    Some((crate::state::SnapMode::Maximize, usable_zone))
+                } else {
+                    None
+                }
+            });
+
+            if let Some((mode, zone)) = snap_action {
+                crate::state::snap_window(data, &self.window, mode, zone);
+            }
         }
     }
 

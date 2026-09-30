@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::os::unix::io::OwnedFd;
 use smithay::{
     delegate_compositor, delegate_data_device, delegate_layer_shell, delegate_output,
@@ -5,14 +6,17 @@ use smithay::{
     desktop::{layer_map_for_output, Space},
     input::{Seat, SeatHandler, SeatState},
     output::Output,
-    reexports::wayland_server::{
-        backend::{ClientData, ClientId, DisconnectReason},
-        protocol::{
-            wl_buffer::WlBuffer, wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface,
+    reexports::{
+        wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState,
+        wayland_server::{
+            backend::{ClientData, ClientId, DisconnectReason},
+            protocol::{
+                wl_buffer::WlBuffer, wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface,
+            },
+            Client, Display, DisplayHandle,
         },
-        Client, Display, DisplayHandle,
     },
-    utils::Serial,
+    utils::{Logical, Point, Rectangle, Serial, Size},
     wayland::{
         buffer::BufferHandler,
         compositor::{CompositorClientState, CompositorHandler, CompositorState},
@@ -56,8 +60,17 @@ pub struct MalusState {
     pub data_device_state: DataDeviceState,
     pub seat: Seat<MalusState>,
     pub space: Space<smithay::desktop::Window>,
+    pub window_restore_geometries: HashMap<WlSurface, (Point<i32, Logical>, Size<i32, Logical>)>,
     pub socket_name: String,
     pub is_running: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapMode {
+    LeftHalf,
+    RightHalf,
+    Maximize,
+    CenterRestore,
 }
 
 impl MalusState {
@@ -81,6 +94,7 @@ impl MalusState {
             data_device_state,
             seat,
             space: Space::default(),
+            window_restore_geometries: HashMap::new(),
             socket_name: String::new(),
             is_running: true,
         }
@@ -92,6 +106,77 @@ impl MalusState {
             .find(|window| window.wl_surface().as_deref() == Some(surface))
             .cloned()
     }
+}
+
+/// Aplica un modo de Aero Snap / Tiling a una ventana de manera atómica
+pub fn snap_window(
+    state: &mut MalusState,
+    window: &smithay::desktop::Window,
+    mode: SnapMode,
+    usable_zone: Rectangle<i32, Logical>,
+) {
+    let Some(surface) = window.wl_surface() else { return };
+    let surface = surface.into_owned();
+
+    let cur_loc = state.space.element_location(window).unwrap_or_default();
+    let cur_geo = window.geometry();
+
+    // Guardar geometría previa flotante para poder restaurarla con Super + Abajo
+    if mode != SnapMode::CenterRestore && !state.window_restore_geometries.contains_key(&surface) {
+        state.window_restore_geometries.insert(surface.clone(), (cur_loc, cur_geo.size));
+    }
+
+    let (target_loc, target_size, xdg_states) = match mode {
+        SnapMode::LeftHalf => (
+            Point::from((usable_zone.loc.x, usable_zone.loc.y)),
+            Size::from((usable_zone.size.w / 2, usable_zone.size.h)),
+            vec![XdgState::TiledLeft],
+        ),
+        SnapMode::RightHalf => (
+            Point::from((usable_zone.loc.x + usable_zone.size.w / 2, usable_zone.loc.y)),
+            Size::from((usable_zone.size.w - usable_zone.size.w / 2, usable_zone.size.h)),
+            vec![XdgState::TiledRight],
+        ),
+        SnapMode::Maximize => (
+            Point::from((usable_zone.loc.x, usable_zone.loc.y)),
+            Size::from((usable_zone.size.w, usable_zone.size.h)),
+            vec![XdgState::Maximized],
+        ),
+        SnapMode::CenterRestore => {
+            if let Some((saved_loc, saved_size)) = state.window_restore_geometries.remove(&surface) {
+                (saved_loc, saved_size, vec![])
+            } else {
+                let w = 800.min(usable_zone.size.w);
+                let h = 600.min(usable_zone.size.h);
+                let x = usable_zone.loc.x + (usable_zone.size.w - w) / 2;
+                let y = usable_zone.loc.y + (usable_zone.size.h - h) / 2;
+                (Point::from((x, y)), Size::from((w, h)), vec![])
+            }
+        }
+    };
+
+    tracing::info!(
+        "🪟 Aero Snap aplicado: modo={:?}, loc={:?}, size={:?}",
+        mode,
+        target_loc,
+        target_size
+    );
+
+    if let Some(toplevel) = window.toplevel() {
+        toplevel.with_pending_state(|top_state| {
+            top_state.size = Some(target_size);
+            top_state.states.unset(XdgState::Maximized);
+            top_state.states.unset(XdgState::TiledLeft);
+            top_state.states.unset(XdgState::TiledRight);
+            for s in xdg_states {
+                top_state.states.set(s);
+            }
+        });
+        toplevel.send_configure();
+    }
+
+    state.space.map_element(window.clone(), target_loc, true);
+    state.space.raise_element(window, true);
 }
 
 // Delegaciones de protocolos de Smithay
@@ -256,6 +341,49 @@ impl XdgShellHandler for MalusState {
         _positioner: PositionerState,
         _token: u32,
     ) {
+    }
+
+    fn maximize_request(&mut self, surface: ToplevelSurface) {
+        tracing::info!("🪟 [XdgShell] maximize_request recibido del cliente");
+        let Some(window) = self.window_for_surface(surface.wl_surface()) else { return };
+        let usable_zone = self.space.outputs().next().map(|output| {
+            let layer_map = smithay::desktop::layer_map_for_output(output);
+            let zone = layer_map.non_exclusive_zone();
+            let output_geo = self.space.output_geometry(output).unwrap_or_default();
+            if zone.size.w > 0 && zone.size.h > 0 {
+                zone
+            } else {
+                Rectangle::new((0, 32).into(), (output_geo.size.w, output_geo.size.h - 32).into())
+            }
+        });
+
+        if let Some(usable_zone) = usable_zone {
+            snap_window(self, &window, SnapMode::Maximize, usable_zone);
+        }
+    }
+
+    fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+        tracing::info!("🪟 [XdgShell] unmaximize_request recibido del cliente");
+        let Some(window) = self.window_for_surface(surface.wl_surface()) else { return };
+        let usable_zone = self.space.outputs().next().map(|output| {
+            let layer_map = smithay::desktop::layer_map_for_output(output);
+            let zone = layer_map.non_exclusive_zone();
+            let output_geo = self.space.output_geometry(output).unwrap_or_default();
+            if zone.size.w > 0 && zone.size.h > 0 {
+                zone
+            } else {
+                Rectangle::new((0, 32).into(), (output_geo.size.w, output_geo.size.h - 32).into())
+            }
+        });
+
+        if let Some(usable_zone) = usable_zone {
+            snap_window(self, &window, SnapMode::CenterRestore, usable_zone);
+        }
+    }
+
+    fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        tracing::info!("🗑️ [XdgShell] Ventana toplevel destruida");
+        self.window_restore_geometries.remove(surface.wl_surface());
     }
 }
 

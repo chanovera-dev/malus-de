@@ -182,6 +182,51 @@ pub fn run_winit() -> Result<()> {
                                     toggle_spotlight(&state.socket_name);
                                     return FilterResult::Intercept(());
                                 }
+
+                                // Atajos de Aero Snap / Tiling estilo Windows 11 (Super o Alt + Flechas)
+                                if has_super || has_alt {
+                                    let is_left = sym == keysyms::KEY_Left.into() || key == 105 || key == 113;
+                                    let is_right = sym == keysyms::KEY_Right.into() || key == 106 || key == 114;
+                                    let is_up = sym == keysyms::KEY_Up.into() || key == 103 || key == 111;
+                                    let is_down = sym == keysyms::KEY_Down.into() || key == 108 || key == 116;
+
+                                    if is_left || is_right || is_up || is_down {
+                                        let active_window = state.space.elements().rev().next().cloned();
+                                        let snap_info = active_window.and_then(|win| {
+                                            state.space.outputs().next().map(|output| {
+                                                let layer_map = smithay::desktop::layer_map_for_output(output);
+                                                let zone = layer_map.non_exclusive_zone();
+                                                let output_geo = state.space.output_geometry(output).unwrap_or_default();
+                                                let usable_zone = if zone.size.w > 0 && zone.size.h > 0 {
+                                                    zone
+                                                } else {
+                                                    Rectangle::new(
+                                                        (0, 32).into(),
+                                                        (output_geo.size.w, output_geo.size.h - 32).into(),
+                                                    )
+                                                };
+
+                                                let snap_mode = if is_left {
+                                                    crate::state::SnapMode::LeftHalf
+                                                } else if is_right {
+                                                    crate::state::SnapMode::RightHalf
+                                                } else if is_up {
+                                                    crate::state::SnapMode::Maximize
+                                                } else {
+                                                    crate::state::SnapMode::CenterRestore
+                                                };
+
+                                                (win, snap_mode, usable_zone)
+                                            })
+                                        });
+
+                                        if let Some((win, snap_mode, usable_zone)) = snap_info {
+                                            info!("🪟 Atajo Aero Snap activado: modo={:?}, ventana activa encontrada", snap_mode);
+                                            crate::state::snap_window(state, &win, snap_mode, usable_zone);
+                                            return FilterResult::Intercept(());
+                                        }
+                                    }
+                                }
                             }
                             FilterResult::Forward
                         },
