@@ -77,17 +77,35 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
                 };
 
                 let cur_loc = handle.current_location();
-                let snap_margin = 16.0;
+                let win_loc = data.space.element_location(&self.window).unwrap_or_default();
+                let win_geo = self.window.geometry();
 
-                if cur_loc.x <= (output_geo.loc.x as f64 + snap_margin) {
-                    tracing::info!("🪟 Aero Snap: cursor en borde izquierdo, acoplando a mitad izquierda");
-                    Some((crate::state::SnapMode::LeftHalf, usable_zone))
-                } else if cur_loc.x >= (output_geo.loc.x + output_geo.size.w) as f64 - snap_margin {
-                    tracing::info!("🪟 Aero Snap: cursor en borde derecho, acoplando a mitad derecha");
-                    Some((crate::state::SnapMode::RightHalf, usable_zone))
-                } else if cur_loc.y <= (output_geo.loc.y + usable_zone.loc.y) as f64 + snap_margin {
-                    tracing::info!("🪟 Aero Snap: cursor en borde superior, maximizando ventana");
+                tracing::info!(
+                    "🔍 Fin de arrastre: cursor={:?}, win_loc={:?}, win_size={:?}, output_geo={:?}",
+                    cur_loc, win_loc, win_geo.size, output_geo
+                );
+
+                let cursor_margin = 40.0;
+                let window_margin = 25;
+
+                let is_left_edge = cur_loc.x <= (output_geo.loc.x as f64 + cursor_margin)
+                    || win_loc.x <= (output_geo.loc.x + window_margin);
+
+                let is_right_edge = cur_loc.x >= (output_geo.loc.x + output_geo.size.w) as f64 - cursor_margin
+                    || (win_loc.x + win_geo.size.w) >= (output_geo.loc.x + output_geo.size.w - window_margin);
+
+                let is_top_edge = cur_loc.y <= (output_geo.loc.y + usable_zone.loc.y) as f64 + cursor_margin
+                    || win_loc.y <= (output_geo.loc.y + usable_zone.loc.y + window_margin);
+
+                if is_top_edge {
+                    tracing::info!("🪟 Aero Snap: borde superior detectado -> Maximizar");
                     Some((crate::state::SnapMode::Maximize, usable_zone))
+                } else if is_left_edge {
+                    tracing::info!("🪟 Aero Snap: borde izquierdo detectado -> Mitad Izquierda");
+                    Some((crate::state::SnapMode::LeftHalf, usable_zone))
+                } else if is_right_edge {
+                    tracing::info!("🪟 Aero Snap: borde derecho detectado -> Mitad Derecha");
+                    Some((crate::state::SnapMode::RightHalf, usable_zone))
                 } else {
                     None
                 }
