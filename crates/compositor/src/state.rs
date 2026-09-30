@@ -146,11 +146,7 @@ pub fn snap_window(
             if let Some((saved_loc, saved_size)) = state.window_restore_geometries.remove(&surface) {
                 (saved_loc, saved_size, vec![])
             } else {
-                let w = 800.min(usable_zone.size.w);
-                let h = 600.min(usable_zone.size.h);
-                let x = usable_zone.loc.x + (usable_zone.size.w - w) / 2;
-                let y = usable_zone.loc.y + (usable_zone.size.h - h) / 2;
-                (Point::from((x, y)), Size::from((w, h)), vec![])
+                (cur_loc, cur_geo.size, vec![])
             }
         }
     };
@@ -364,7 +360,13 @@ impl XdgShellHandler for MalusState {
 
     fn unmaximize_request(&mut self, surface: ToplevelSurface) {
         tracing::info!("🪟 [XdgShell] unmaximize_request recibido del cliente");
-        let Some(window) = self.window_for_surface(surface.wl_surface()) else { return };
+        let surf = surface.wl_surface();
+        if !self.window_restore_geometries.contains_key(surf) {
+            tracing::info!("ℹ️ [XdgShell] unmaximize_request ignorado: la ventana no estaba en estado maximizado.");
+            return;
+        }
+
+        let Some(window) = self.window_for_surface(surf) else { return };
         let usable_zone = self.space.outputs().next().map(|output| {
             let layer_map = smithay::desktop::layer_map_for_output(output);
             let zone = layer_map.non_exclusive_zone();
