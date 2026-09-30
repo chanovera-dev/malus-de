@@ -59,7 +59,16 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
     ) {
         handle.button(data, event);
         if handle.current_pressed().is_empty() {
-            tracing::info!("🛑 Soltado botón del ratón: finalizando MoveSurfaceGrab.");
+            let cur_loc = handle.current_location();
+            let win_loc = data.space.element_location(&self.window).unwrap_or_default();
+            let win_geo = self.window.geometry();
+            let outputs_count = data.space.outputs().count();
+
+            tracing::info!(
+                "🛑 Soltado botón del ratón: cur_loc={:?}, win_loc={:?}, win_size={:?}, outputs_count={}",
+                cur_loc, win_loc, win_geo.size, outputs_count
+            );
+
             handle.unset_grab(self, data, event.serial, event.time, true);
 
             // Detección de Aero Snap al soltar la ventana en los bordes de la pantalla
@@ -76,15 +85,6 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
                     )
                 };
 
-                let cur_loc = handle.current_location();
-                let win_loc = data.space.element_location(&self.window).unwrap_or_default();
-                let win_geo = self.window.geometry();
-
-                tracing::info!(
-                    "🔍 Fin de arrastre: cursor={:?}, win_loc={:?}, win_size={:?}, output_geo={:?}",
-                    cur_loc, win_loc, win_geo.size, output_geo
-                );
-
                 let cursor_margin = 40.0;
                 let window_margin = 25;
 
@@ -96,6 +96,11 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
 
                 let is_top_edge = cur_loc.y <= (output_geo.loc.y + usable_zone.loc.y) as f64 + cursor_margin
                     || win_loc.y <= (output_geo.loc.y + usable_zone.loc.y + window_margin);
+
+                tracing::info!(
+                    "🔍 Aero Snap evaluación: left={}, right={}, top={}, output_geo={:?}, usable_zone={:?}",
+                    is_left_edge, is_right_edge, is_top_edge, output_geo, usable_zone
+                );
 
                 if is_top_edge {
                     tracing::info!("🪟 Aero Snap: borde superior detectado -> Maximizar");
