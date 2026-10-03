@@ -211,7 +211,7 @@ impl CompositorHandler for MalusState {
         });
 
         if let Some(output) = target_output {
-            let mut should_focus_overlay = false;
+            let mut should_focus_overlay = None;
             {
                 let mut map = smithay::desktop::layer_map_for_output(&output);
                 map.arrange();
@@ -224,23 +224,23 @@ impl CompositorHandler for MalusState {
                         .unwrap_or(false)
                 });
 
-                tracing::info!("🔄 Commit de Layer Surface: initial_configure_sent={}", initial_configure_sent);
-
                 if let Some(layer) = map.layer_for_surface(surface, smithay::desktop::WindowSurfaceType::all()) {
                     if !initial_configure_sent {
                         tracing::info!("📤 Enviando initial configure a layer surface");
                         layer.layer_surface().send_configure();
                     }
-                    if layer.layer() == smithay::wayland::shell::wlr_layer::Layer::Overlay {
-                        should_focus_overlay = true;
+                    if layer.layer() == smithay::wayland::shell::wlr_layer::Layer::Overlay && layer.can_receive_keyboard_focus() {
+                        should_focus_overlay = Some(layer.wl_surface().clone());
                     }
                 }
             }
 
-            if should_focus_overlay {
-                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+            if let Some(focus_surf) = should_focus_overlay {
                 if let Some(kb) = self.seat.get_keyboard() {
-                    kb.set_focus(self, Some(surface.clone()), serial);
+                    if kb.current_focus().as_ref() != Some(&focus_surf) {
+                        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                        kb.set_focus(self, Some(focus_surf), serial);
+                    }
                 }
             }
         }
@@ -309,18 +309,39 @@ impl XdgShellHandler for MalusState {
         let seat: Seat<Self> = Seat::from_resource(&seat).unwrap();
         let pointer = seat.get_pointer().unwrap();
 
-        if !pointer.has_grab(serial) {
-            tracing::warn!("⚠️ [XdgShell] move_request ignorado: pointer no tiene grab activo con serial {:?}", serial);
-            return;
-        }
+        let start_data = pointer.grab_start_data().unwrap_or_else(|| {
+            tracing::info!("ℹ️ [XdgShell] pointer no tenía click grab activo con serial {:?}; usando start_data sintético", serial);
+            smithay::input::pointer::GrabStartData {
+                focus: None,
+                button: 0x110,
+                location: pointer.current_location(),
+            }
+        });
 
-        let start_data = pointer.grab_start_data().unwrap();
         let Some(window) = self.window_for_surface(surface.wl_surface()) else {
             tracing::warn!("⚠️ [XdgShell] move_request: no se encontró ventana para la superficie");
             return;
         };
 
-        let initial_window_location = self.space.element_location(&window).unwrap_or_default();
+        let initial_window_location = if let Some(&(_saved_loc, saved_size)) = self.window_restore_geometries.get(surface.wl_surface()) {
+            if let Some(toplevel) = window.toplevel() {
+                toplevel.with_pending_state(|top_state| {
+                    top_state.size = Some(saved_size);
+                    top_state.states.unset(XdgState::Maximized);
+                    top_state.states.unset(XdgState::TiledLeft);
+                    top_state.states.unset(XdgState::TiledRight);
+                });
+                toplevel.send_configure();
+            }
+            let cursor_x = start_data.location.x as i32;
+            let current_loc = self.space.element_location(&window).unwrap_or_default();
+            let new_x = (cursor_x - saved_size.w / 2).max(0);
+            let new_loc = Point::from((new_x, current_loc.y));
+            self.space.map_element(window.clone(), new_loc, true);
+            new_loc
+        } else {
+            self.space.element_location(&window).unwrap_or_default()
+        };
 
         let grab = crate::grabs::MoveSurfaceGrab {
             start_data,

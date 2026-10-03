@@ -40,9 +40,6 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
 
         // Actualizar overlay de previsualización Aero Snap en tiempo real
         let cur_loc = event.location;
-        let win_loc: Point<i32, Logical> = new_location.to_i32_round();
-        let win_geo = self.window.geometry();
-
         let preview = data.space.outputs().next().and_then(|output| {
             let (zone, output_geo) = {
                 let layer_map = smithay::desktop::layer_map_for_output(output);
@@ -57,37 +54,8 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
                 )
             };
 
-            let cursor_margin = 80.0;
-            let window_margin = 60;
-            let top_margin = 100.0;
-
-            let is_top_edge = cur_loc.y <= (output_geo.loc.y + usable_zone.loc.y) as f64 + top_margin
-                || win_loc.y <= (output_geo.loc.y + usable_zone.loc.y + window_margin);
-
-            let is_left_edge = cur_loc.x <= (output_geo.loc.x as f64 + cursor_margin)
-                || win_loc.x <= (output_geo.loc.x + window_margin);
-
-            let is_right_edge = cur_loc.x >= (output_geo.loc.x + output_geo.size.w) as f64 - cursor_margin
-                || (win_loc.x + win_geo.size.w) >= (output_geo.loc.x + output_geo.size.w - window_margin);
-
-            if is_top_edge {
-                Some(Rectangle::new(
-                    (usable_zone.loc.x + 8, usable_zone.loc.y + 8).into(),
-                    (usable_zone.size.w - 16, usable_zone.size.h - 16).into(),
-                ))
-            } else if is_left_edge {
-                Some(Rectangle::new(
-                    (usable_zone.loc.x + 8, usable_zone.loc.y + 8).into(),
-                    (usable_zone.size.w / 2 - 16, usable_zone.size.h - 16).into(),
-                ))
-            } else if is_right_edge {
-                Some(Rectangle::new(
-                    (usable_zone.loc.x + usable_zone.size.w / 2 + 8, usable_zone.loc.y + 8).into(),
-                    (usable_zone.size.w - usable_zone.size.w / 2 - 16, usable_zone.size.h - 16).into(),
-                ))
-            } else {
-                None
-            }
+            evaluate_snap(cur_loc, output_geo, usable_zone)
+                .and_then(|mode| preview_for_snap(mode, usable_zone))
         });
 
         data.snap_preview = preview;
@@ -141,36 +109,13 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
                     )
                 };
 
-                let cursor_margin = 80.0;
-                let window_margin = 60;
-                let top_margin = 100.0;
-
-                let is_top_edge = cur_loc.y <= (output_geo.loc.y + usable_zone.loc.y) as f64 + top_margin
-                    || win_loc.y <= (output_geo.loc.y + usable_zone.loc.y + window_margin);
-
-                let is_left_edge = cur_loc.x <= (output_geo.loc.x as f64 + cursor_margin)
-                    || win_loc.x <= (output_geo.loc.x + window_margin);
-
-                let is_right_edge = cur_loc.x >= (output_geo.loc.x + output_geo.size.w) as f64 - cursor_margin
-                    || (win_loc.x + win_geo.size.w) >= (output_geo.loc.x + output_geo.size.w - window_margin);
-
+                let mode = evaluate_snap(cur_loc, output_geo, usable_zone);
                 tracing::info!(
-                    "🔍 Aero Snap evaluación: left={}, right={}, top={}, output_geo={:?}, usable_zone={:?}",
-                    is_left_edge, is_right_edge, is_top_edge, output_geo, usable_zone
+                    "🔍 Aero Snap evaluación al soltar: modo={:?}, cur_loc={:?}, output_geo={:?}, usable_zone={:?}",
+                    mode, cur_loc, output_geo, usable_zone
                 );
 
-                if is_top_edge {
-                    tracing::info!("🪟 Aero Snap: borde superior detectado -> Maximizar");
-                    Some((crate::state::SnapMode::Maximize, usable_zone))
-                } else if is_left_edge {
-                    tracing::info!("🪟 Aero Snap: borde izquierdo detectado -> Mitad Izquierda");
-                    Some((crate::state::SnapMode::LeftHalf, usable_zone))
-                } else if is_right_edge {
-                    tracing::info!("🪟 Aero Snap: borde derecho detectado -> Mitad Derecha");
-                    Some((crate::state::SnapMode::RightHalf, usable_zone))
-                } else {
-                    None
-                }
+                mode.map(|m| (m, usable_zone))
             });
 
             if let Some((mode, zone)) = snap_action {
@@ -295,3 +240,47 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
 
     fn unset(&mut self, _data: &mut MalusState) {}
 }
+
+pub fn evaluate_snap(
+    cur_loc: Point<f64, Logical>,
+    output_geo: Rectangle<i32, Logical>,
+    usable_zone: Rectangle<i32, Logical>,
+) -> Option<crate::state::SnapMode> {
+    let edge_margin = 35.0;
+
+    let is_left = cur_loc.x <= output_geo.loc.x as f64 + edge_margin;
+    let is_right = cur_loc.x >= (output_geo.loc.x + output_geo.size.w) as f64 - edge_margin;
+    let is_top = cur_loc.y <= (output_geo.loc.y + usable_zone.loc.y) as f64 + edge_margin;
+
+    if is_left {
+        Some(crate::state::SnapMode::LeftHalf)
+    } else if is_right {
+        Some(crate::state::SnapMode::RightHalf)
+    } else if is_top {
+        Some(crate::state::SnapMode::Maximize)
+    } else {
+        None
+    }
+}
+
+pub fn preview_for_snap(
+    mode: crate::state::SnapMode,
+    usable_zone: Rectangle<i32, Logical>,
+) -> Option<Rectangle<i32, Logical>> {
+    match mode {
+        crate::state::SnapMode::Maximize => Some(Rectangle::new(
+            (usable_zone.loc.x + 8, usable_zone.loc.y + 8).into(),
+            (usable_zone.size.w - 16, usable_zone.size.h - 16).into(),
+        )),
+        crate::state::SnapMode::LeftHalf => Some(Rectangle::new(
+            (usable_zone.loc.x + 8, usable_zone.loc.y + 8).into(),
+            (usable_zone.size.w / 2 - 12, usable_zone.size.h - 16).into(),
+        )),
+        crate::state::SnapMode::RightHalf => Some(Rectangle::new(
+            (usable_zone.loc.x + usable_zone.size.w / 2 + 4, usable_zone.loc.y + 8).into(),
+            (usable_zone.size.w - usable_zone.size.w / 2 - 12, usable_zone.size.h - 16).into(),
+        )),
+        crate::state::SnapMode::CenterRestore => None,
+    }
+}
+

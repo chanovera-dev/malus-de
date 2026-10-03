@@ -116,9 +116,6 @@ pub fn run_winit() -> Result<()> {
     let dark_acrylic = Color32F::new(0.094, 0.094, 0.106, 1.0);
     let start_time = Instant::now();
     let mut clients = Vec::new();
-    let mut super_pressed = false;
-    let mut alt_pressed = false;
-    let mut ctrl_pressed = false;
 
     while state.is_running {
         let status = winit_event_loop.dispatch_new_events(|event| match event {
@@ -139,22 +136,6 @@ pub fn run_winit() -> Result<()> {
                     let key = event.key_code().raw();
                     let is_pressed = event.state() == KeyState::Pressed;
 
-                    // 125/126 (evdev KEY_LEFTMETA/KEY_RIGHTMETA), 133/134 (XKB keycode = evdev + 8)
-                    if key == 125 || key == 126 || key == 133 || key == 134 {
-                        super_pressed = is_pressed;
-                        info!("Teclado: Super tecla estado = {}", super_pressed);
-                    }
-                    // 56/100 (evdev KEY_LEFTALT/KEY_RIGHTALT), 64/108 (XKB keycode = evdev + 8)
-                    if key == 56 || key == 100 || key == 64 || key == 108 {
-                        alt_pressed = is_pressed;
-                        info!("Teclado: Alt tecla estado = {}", alt_pressed);
-                    }
-                    // 29/97 (evdev KEY_LEFTCTRL/KEY_RIGHTCTRL), 37/105 (XKB keycode = evdev + 8)
-                    if key == 29 || key == 97 || key == 37 || key == 105 {
-                        ctrl_pressed = is_pressed;
-                        info!("Teclado: Ctrl tecla estado = {}", ctrl_pressed);
-                    }
-
                     keyboard.input::<(), _>(
                         &mut state,
                         event.key_code(),
@@ -164,12 +145,12 @@ pub fn run_winit() -> Result<()> {
                         |state, modifiers, keysym_handle| {
                             if is_pressed {
                                 let sym = keysym_handle.modified_sym();
-                                let has_super = modifiers.logo || super_pressed;
-                                let has_alt = modifiers.alt || alt_pressed;
-                                let has_ctrl = modifiers.ctrl || ctrl_pressed;
+                                let has_super = modifiers.logo;
+                                let has_alt = modifiers.alt;
+                                let has_ctrl = modifiers.ctrl;
 
-                                let is_space = sym == keysyms::KEY_space.into() || key == 57 || key == 65;
-                                let is_k = sym == keysyms::KEY_k.into() || sym == keysyms::KEY_K.into() || key == 45;
+                                let is_space = sym == keysyms::KEY_space.into();
+                                let is_k = sym == keysyms::KEY_k.into() || sym == keysyms::KEY_K.into();
 
                                 // Atajos para alternar Spotlight:
                                 // 1. Super + Espacio (macOS / Malus DE nativo)
@@ -237,69 +218,42 @@ pub fn run_winit() -> Result<()> {
                     let point = event.position_transformed(output_geo.size);
                     let serial = SERIAL_COUNTER.next_serial();
 
-                    if pointer.is_grabbed() {
-                        pointer.motion(
-                            &mut state,
-                            None,
-                            &MotionEvent {
-                                location: point,
-                                serial,
-                                time: event.time_msec(),
-                            },
-                        );
-                    } else {
-                        let layer_target = {
-                            let layer_map = smithay::desktop::layer_map_for_output(&output);
-                            let under_layer = layer_map.layer_under(Layer::Overlay, point)
-                                .or_else(|| layer_map.layer_under(Layer::Top, point));
+                    let layer_target = {
+                        let layer_map = smithay::desktop::layer_map_for_output(&output);
+                        let under_layer = layer_map.layer_under(Layer::Overlay, point)
+                            .or_else(|| layer_map.layer_under(Layer::Top, point));
 
-                            under_layer.and_then(|layer| {
-                                layer_map.layer_geometry(layer).map(|geo| {
-                                    let local_point = point - geo.loc.to_f64();
-                                    let (surf, sub_loc) = layer
-                                        .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
-                                        .unwrap_or_else(|| (layer.wl_surface().clone(), (0, 0).into()));
-                                    (surf, (geo.loc + sub_loc).to_f64())
-                                })
+                        under_layer.and_then(|layer| {
+                            layer_map.layer_geometry(layer).map(|geo| {
+                                let local_point = point - geo.loc.to_f64();
+                                let (surf, sub_loc) = layer
+                                    .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                                    .unwrap_or_else(|| (layer.wl_surface().clone(), (0, 0).into()));
+                                (surf, (geo.loc + sub_loc).to_f64())
                             })
-                        };
+                        })
+                    };
 
-                        if let Some((surf, focus_loc)) = layer_target {
-                            pointer.motion(
-                                &mut state,
-                                Some((surf, focus_loc)),
-                                &MotionEvent {
-                                    location: point,
-                                    serial,
-                                    time: event.time_msec(),
-                                },
-                            );
-                        } else if let Some((window, loc)) = state.space.element_under(point) {
-                            let local_point = point - loc.to_f64();
-                            let focus = window
-                                .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
-                                .map(|(surf, sub_loc)| (surf, (loc + sub_loc).to_f64()));
-                            pointer.motion(
-                                &mut state,
-                                focus,
-                                &MotionEvent {
-                                    location: point,
-                                    serial,
-                                    time: event.time_msec(),
-                                },
-                            );
-                        } else {
-                            pointer.motion(
-                                &mut state,
-                                None,
-                                &MotionEvent {
-                                    location: point,
-                                    serial,
-                                    time: event.time_msec(),
-                                },
-                            );
-                        }
-                    }
+                    let under_target = if let Some((surf, focus_loc)) = layer_target {
+                        Some((surf, focus_loc))
+                    } else if let Some((window, loc)) = state.space.element_under(point) {
+                        let local_point = point - loc.to_f64();
+                        window
+                            .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                            .map(|(surf, sub_loc)| (surf, (loc + sub_loc).to_f64()))
+                    } else {
+                        None
+                    };
+
+                    pointer.motion(
+                        &mut state,
+                        under_target,
+                        &MotionEvent {
+                            location: point,
+                            serial,
+                            time: event.time_msec(),
+                        },
+                    );
                     pointer.frame(&mut state);
                 }
                 InputEvent::PointerButton { event } => {
@@ -337,7 +291,7 @@ pub fn run_winit() -> Result<()> {
                             }
 
                             // Si Super está presionado y es clic izquierdo (0x110 = BTN_LEFT): arrastrar ventana inmediatamente
-                            let has_super = super_pressed || keyboard.modifier_state().logo;
+                            let has_super = keyboard.modifier_state().logo;
                             if has_super && event.button_code() == 0x110 {
                                 info!("🚀 Atajo Super + Clic: iniciando arrastre directo de ventana desde {:?}", loc);
                                 let initial_window_location = loc;
@@ -456,7 +410,11 @@ pub fn run_winit() -> Result<()> {
                     if let Some(preview) = state.snap_preview {
                         let preview_phys = preview.to_physical_precise_round(1.0);
                         // Fondo azul translúcido (#0078d4 con 35% de opacidad)
-                        let _ = frame.draw_solid(preview_phys, &[damage], Color32F::new(0.0, 0.47, 0.83, 0.35));
+                        let _ = frame.draw_solid(
+                            preview_phys,
+                            &[Rectangle::from_size(preview_phys.size)],
+                            Color32F::new(0.0, 0.47, 0.83, 0.35),
+                        );
 
                         // Borde resaltado azul de 3px
                         let border_color = Color32F::new(0.38, 0.72, 1.0, 0.85);
@@ -472,10 +430,10 @@ pub fn run_winit() -> Result<()> {
                             (b_thickness, preview_phys.size.h).into(),
                         );
 
-                        let _ = frame.draw_solid(b_top, &[damage], border_color);
-                        let _ = frame.draw_solid(b_bottom, &[damage], border_color);
-                        let _ = frame.draw_solid(b_left, &[damage], border_color);
-                        let _ = frame.draw_solid(b_right, &[damage], border_color);
+                        let _ = frame.draw_solid(b_top, &[Rectangle::from_size(b_top.size)], border_color);
+                        let _ = frame.draw_solid(b_bottom, &[Rectangle::from_size(b_bottom.size)], border_color);
+                        let _ = frame.draw_solid(b_left, &[Rectangle::from_size(b_left.size)], border_color);
+                        let _ = frame.draw_solid(b_right, &[Rectangle::from_size(b_right.size)], border_color);
                     }
 
                     let _ = frame.finish();

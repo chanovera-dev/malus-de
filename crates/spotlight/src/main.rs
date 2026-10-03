@@ -37,16 +37,29 @@ window.malus-spotlight-window {
     margin-bottom: 8px;
 }
 
-.spotlight-entry {
+.spotlight-entry,
+entry.spotlight-entry,
+entry.spotlight-entry text {
     background: transparent;
     border: none;
     color: #ffffff;
+    caret-color: #3b82f6;
     font-size: 18px;
     font-weight: 500;
     box-shadow: none;
 }
 
-.spotlight-entry:focus {
+entry.spotlight-entry text selection {
+    background-color: #2563eb;
+    color: #ffffff;
+}
+
+entry.spotlight-entry placeholder {
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.spotlight-entry:focus,
+entry.spotlight-entry:focus {
     box-shadow: none;
 }
 
@@ -288,7 +301,11 @@ fn build_spotlight_ui(app: &Application) {
         match keyval {
             Key::Escape => {
                 info!("Cerrando Spotlight...");
-                win_close.close();
+                if let Some(app) = win_close.application() {
+                    app.quit();
+                } else {
+                    win_close.close();
+                }
                 glib::Propagation::Stop
             }
             Key::Return | Key::KP_Enter => {
@@ -305,7 +322,11 @@ fn build_spotlight_ui(app: &Application) {
                         }
                     }
                 }
-                win_close.close();
+                if let Some(app) = win_close.application() {
+                    app.quit();
+                } else {
+                    win_close.close();
+                }
                 glib::Propagation::Stop
             }
             Key::Down => {
@@ -330,7 +351,7 @@ fn build_spotlight_ui(app: &Application) {
         }
     });
 
-    search_entry.add_controller(key_controller);
+    window.add_controller(key_controller);
 
     window.set_child(Some(&card));
     window.present();
