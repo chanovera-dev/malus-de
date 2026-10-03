@@ -248,26 +248,32 @@ pub fn run_winit() -> Result<()> {
                             },
                         );
                     } else {
-                        let layer_map = smithay::desktop::layer_map_for_output(&output);
-                        let under_layer = layer_map.layer_under(Layer::Overlay, point)
-                            .or_else(|| layer_map.layer_under(Layer::Top, point));
+                        let layer_target = {
+                            let layer_map = smithay::desktop::layer_map_for_output(&output);
+                            let under_layer = layer_map.layer_under(Layer::Overlay, point)
+                                .or_else(|| layer_map.layer_under(Layer::Top, point));
 
-                        if let Some(layer) = under_layer {
-                            if let Some(geo) = layer_map.layer_geometry(layer) {
-                                let local_point = point - geo.loc.to_f64();
-                                let (surf, sub_loc) = layer
-                                    .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
-                                    .unwrap_or_else(|| (layer.wl_surface().clone(), (0, 0).into()));
-                                pointer.motion(
-                                    &mut state,
-                                    Some((surf, (geo.loc + sub_loc).to_f64())),
-                                    &MotionEvent {
-                                        location: point,
-                                        serial,
-                                        time: event.time_msec(),
-                                    },
-                                );
-                            }
+                            under_layer.and_then(|layer| {
+                                layer_map.layer_geometry(layer).map(|geo| {
+                                    let local_point = point - geo.loc.to_f64();
+                                    let (surf, sub_loc) = layer
+                                        .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                                        .unwrap_or_else(|| (layer.wl_surface().clone(), (0, 0).into()));
+                                    (surf, (geo.loc + sub_loc).to_f64())
+                                })
+                            })
+                        };
+
+                        if let Some((surf, focus_loc)) = layer_target {
+                            pointer.motion(
+                                &mut state,
+                                Some((surf, focus_loc)),
+                                &MotionEvent {
+                                    location: point,
+                                    serial,
+                                    time: event.time_msec(),
+                                },
+                            );
                         } else if let Some((window, loc)) = state.space.element_under(point) {
                             let local_point = point - loc.to_f64();
                             let focus = window
@@ -301,19 +307,28 @@ pub fn run_winit() -> Result<()> {
                     let is_pressed = event.state() == ButtonState::Pressed;
                     let point = pointer.current_location();
 
-                    let layer_map = smithay::desktop::layer_map_for_output(&output);
-                    let under_layer = layer_map.layer_under(Layer::Overlay, point)
-                        .or_else(|| layer_map.layer_under(Layer::Top, point));
-
                     if is_pressed {
-                        if let Some(layer) = under_layer {
-                            info!("🎯 Clic de ratón sobre layer surface: namespace={}, pos={:?}", layer.namespace(), point);
-                            if let Some(geo) = layer_map.layer_geometry(layer) {
-                                let local_point = point - geo.loc.to_f64();
-                                if let Some((surf, _)) = layer.surface_under(local_point, smithay::desktop::WindowSurfaceType::all()) {
-                                    keyboard.set_focus(&mut state, Some(surf), serial);
+                        let layer_surf = {
+                            let layer_map = smithay::desktop::layer_map_for_output(&output);
+                            let under_layer = layer_map.layer_under(Layer::Overlay, point)
+                                .or_else(|| layer_map.layer_under(Layer::Top, point));
+
+                            if let Some(layer) = under_layer {
+                                info!("🎯 Clic de ratón sobre layer surface: namespace={}, pos={:?}", layer.namespace(), point);
+                                if let Some(geo) = layer_map.layer_geometry(layer) {
+                                    let local_point = point - geo.loc.to_f64();
+                                    layer.surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                                        .map(|(surf, _)| surf)
+                                } else {
+                                    None
                                 }
+                            } else {
+                                None
                             }
+                        };
+
+                        if let Some(surf) = layer_surf {
+                            keyboard.set_focus(&mut state, Some(surf), serial);
                         } else if let Some((window, loc)) = state.space.element_under(point) {
                             let window = window.clone();
                             state.space.raise_element(&window, true);
