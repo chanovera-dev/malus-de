@@ -233,7 +233,11 @@ fn create_dock_item(app_def: &DockAppDef) -> GtkBox {
                 command.env("WAYLAND_DISPLAY", wayland_disp);
             }
             command.env("GDK_BACKEND", "wayland");
-            let _ = command.spawn();
+            if let Ok(mut child) = command.spawn() {
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
         }
     });
 

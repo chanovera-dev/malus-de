@@ -72,7 +72,12 @@ pub fn create_status_tray_widget() -> GtkBox {
             .env("GSK_RENDERER", "cairo")
             .spawn()
         {
-            Ok(child) => info!("Spotlight lanzado con éxito, PID={}", child.id()),
+            Ok(mut child) => {
+                info!("Spotlight lanzado con éxito, PID={}", child.id());
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
             Err(e) => tracing::error!("Error al lanzar Spotlight: {:?}", e),
         }
     });

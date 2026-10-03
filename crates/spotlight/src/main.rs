@@ -318,7 +318,11 @@ fn build_spotlight_ui(app: &Application) {
                         if let Some((exe, args)) = parts.split_first() {
                             let mut command = Command::new(exe);
                             command.args(args);
-                            let _ = command.spawn();
+                            if let Ok(mut child) = command.spawn() {
+                                std::thread::spawn(move || {
+                                    let _ = child.wait();
+                                });
+                            }
                         }
                     }
                 }

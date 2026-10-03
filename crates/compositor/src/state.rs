@@ -123,32 +123,45 @@ pub fn snap_window(
     let cur_loc = state.space.element_location(window).unwrap_or_default();
     let cur_geo = window.geometry();
 
-    // Guardar geometría previa flotante para poder restaurarla con Super + Abajo
-    if mode != SnapMode::CenterRestore && !state.window_restore_geometries.contains_key(&surface) {
+    let is_currently_snapped = window.toplevel().map(|t| {
+        let states = &t.current_state().states;
+        states.contains(XdgState::Maximized)
+            || states.contains(XdgState::TiledLeft)
+            || states.contains(XdgState::TiledRight)
+    }).unwrap_or(false);
+
+    // Guardar geometría previa flotante SOLO si la ventana no estaba ya snapped y su tamaño actual es válido
+    if mode != SnapMode::CenterRestore && !is_currently_snapped && cur_geo.size.w > 150 && cur_geo.size.h > 150 {
         state.window_restore_geometries.insert(surface.clone(), (cur_loc, cur_geo.size));
     }
 
     let (target_loc, target_size, xdg_states) = match mode {
         SnapMode::LeftHalf => (
             Point::from((usable_zone.loc.x, usable_zone.loc.y)),
-            Size::from((usable_zone.size.w / 2, usable_zone.size.h)),
+            Some(Size::from((usable_zone.size.w / 2, usable_zone.size.h))),
             vec![XdgState::TiledLeft],
         ),
         SnapMode::RightHalf => (
             Point::from((usable_zone.loc.x + usable_zone.size.w / 2, usable_zone.loc.y)),
-            Size::from((usable_zone.size.w - usable_zone.size.w / 2, usable_zone.size.h)),
+            Some(Size::from((usable_zone.size.w - usable_zone.size.w / 2, usable_zone.size.h))),
             vec![XdgState::TiledRight],
         ),
         SnapMode::Maximize => (
             Point::from((usable_zone.loc.x, usable_zone.loc.y)),
-            Size::from((usable_zone.size.w, usable_zone.size.h)),
+            Some(Size::from((usable_zone.size.w, usable_zone.size.h))),
             vec![XdgState::Maximized],
         ),
         SnapMode::CenterRestore => {
-            if let Some((saved_loc, saved_size)) = state.window_restore_geometries.remove(&surface) {
-                (saved_loc, saved_size, vec![])
+            if let Some((saved_loc, saved_size)) = state.window_restore_geometries.get(&surface).copied() {
+                let size_opt = if saved_size.w > 100 && saved_size.h > 100 {
+                    Some(saved_size)
+                } else {
+                    None
+                };
+                (saved_loc, size_opt, vec![])
             } else {
-                (cur_loc, cur_geo.size, vec![])
+                let default_loc = Point::from((usable_zone.loc.x + 80, usable_zone.loc.y + 80));
+                (default_loc, None, vec![])
             }
         }
     };
@@ -162,7 +175,7 @@ pub fn snap_window(
 
     if let Some(toplevel) = window.toplevel() {
         toplevel.with_pending_state(|top_state| {
-            top_state.size = Some(target_size);
+            top_state.size = target_size;
             top_state.states.unset(XdgState::Maximized);
             top_state.states.unset(XdgState::TiledLeft);
             top_state.states.unset(XdgState::TiledRight);
@@ -199,8 +212,25 @@ impl CompositorHandler for MalusState {
         smithay::backend::renderer::utils::on_commit_buffer_handler::<Self>(surface);
 
         // Si es una ventana regular en Space, actualizamos sus dimensiones internas
-        if let Some(window) = self.space.elements().find(|w| w.wl_surface().as_deref() == Some(surface)) {
+        for window in self.space.elements() {
             window.on_commit();
+        }
+
+        if let Some(window) = self.window_for_surface(surface) {
+            let is_currently_snapped = window.toplevel().map(|t| {
+                let states = &t.current_state().states;
+                states.contains(XdgState::Maximized)
+                    || states.contains(XdgState::TiledLeft)
+                    || states.contains(XdgState::TiledRight)
+            }).unwrap_or(false);
+
+            if !is_currently_snapped {
+                let geo = window.geometry();
+                let loc = self.space.element_location(&window).unwrap_or_default();
+                if geo.size.w > 150 && geo.size.h > 150 {
+                    self.window_restore_geometries.insert(surface.clone(), (loc, geo.size));
+                }
+            }
         }
 
         // Si la superficie pertenece a una Layer Surface (Top Bar, Dock, Notificaciones, etc.)
@@ -323,20 +353,32 @@ impl XdgShellHandler for MalusState {
             return;
         };
 
-        let initial_window_location = if let Some(&(_saved_loc, saved_size)) = self.window_restore_geometries.get(surface.wl_surface()) {
+        let is_snapped = window.toplevel().map(|t| {
+            let states = &t.current_state().states;
+            states.contains(XdgState::Maximized)
+                || states.contains(XdgState::TiledLeft)
+                || states.contains(XdgState::TiledRight)
+        }).unwrap_or(false);
+
+        let initial_window_location = if is_snapped {
+            let saved = self.window_restore_geometries.get(surface.wl_surface()).copied();
+            let restore_size = saved.map(|(_, s)| s).filter(|s| s.w > 100 && s.h > 100);
+
             if let Some(toplevel) = window.toplevel() {
                 toplevel.with_pending_state(|top_state| {
-                    top_state.size = Some(saved_size);
+                    top_state.size = restore_size;
                     top_state.states.unset(XdgState::Maximized);
                     top_state.states.unset(XdgState::TiledLeft);
                     top_state.states.unset(XdgState::TiledRight);
                 });
                 toplevel.send_configure();
             }
+
+            let float_w = restore_size.map(|s| s.w).unwrap_or(400);
             let cursor_x = start_data.location.x as i32;
-            let current_loc = self.space.element_location(&window).unwrap_or_default();
-            let new_x = (cursor_x - saved_size.w / 2).max(0);
-            let new_loc = Point::from((new_x, current_loc.y));
+            let cursor_y = start_data.location.y as i32;
+            let new_x = (cursor_x - float_w / 2).max(0);
+            let new_loc = Point::from((new_x, (cursor_y - 15).max(32)));
             self.space.map_element(window.clone(), new_loc, true);
             new_loc
         } else {
@@ -384,11 +426,6 @@ impl XdgShellHandler for MalusState {
     fn unmaximize_request(&mut self, surface: ToplevelSurface) {
         tracing::info!("🪟 [XdgShell] unmaximize_request recibido del cliente");
         let surf = surface.wl_surface();
-        if !self.window_restore_geometries.contains_key(surf) {
-            tracing::info!("ℹ️ [XdgShell] unmaximize_request ignorado: la ventana no estaba en estado maximizado.");
-            return;
-        }
-
         let Some(window) = self.window_for_surface(surf) else { return };
         let usable_zone = self.space.outputs().next().map(|output| {
             let layer_map = smithay::desktop::layer_map_for_output(output);

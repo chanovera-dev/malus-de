@@ -48,7 +48,11 @@ pub fn create_apple_menu() -> MenuButton {
     item_settings.connect_clicked(move |_| {
         popover_clone.popdown();
         info!("Abriendo Preferencias del Sistema...");
-        let _ = std::process::Command::new("gnome-control-center").spawn();
+        if let Ok(mut child) = std::process::Command::new("gnome-control-center").spawn() {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
     });
     content_box.append(&item_settings);
 
