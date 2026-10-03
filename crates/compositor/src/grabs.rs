@@ -7,7 +7,6 @@ use smithay::{
         GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle, RelativeMotionEvent,
     },
     utils::{Logical, Point, Rectangle},
-    wayland::seat::WaylandFocus,
 };
 
 use crate::state::MalusState;
@@ -123,25 +122,6 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
             }
 
             handle.unset_grab(self, data, event.serial, event.time, true);
-
-            // Restaurar inmediatamente el foco de hover del puntero sobre la ventana
-            let point = handle.current_location();
-            let under_element = data.space.element_under(point).map(|(w, loc)| {
-                let local_point = point - loc.to_f64();
-                let (surf, sub_loc) = w
-                    .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
-                    .unwrap_or_else(|| (w.wl_surface().unwrap().into_owned(), (0, 0).into()));
-                (surf, (loc + sub_loc).to_f64())
-            });
-            handle.motion(
-                data,
-                under_element,
-                &smithay::input::pointer::MotionEvent {
-                    location: point,
-                    serial: event.serial,
-                    time: event.time,
-                },
-            );
         }
     }
 

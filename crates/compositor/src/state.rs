@@ -392,7 +392,7 @@ impl XdgShellHandler for MalusState {
         };
 
         self.space.raise_element(&window, true);
-        pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Keep);
+        pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);
         tracing::info!("✅ [XdgShell] MoveSurfaceGrab activado exitosamente para arrastre por título!");
     }
 

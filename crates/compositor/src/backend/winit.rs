@@ -290,10 +290,11 @@ pub fn run_winit() -> Result<()> {
                                 keyboard.set_focus(&mut state, Some(surface.into_owned()), serial);
                             }
 
-                            // Si Super está presionado y es clic izquierdo (0x110 = BTN_LEFT): arrastrar ventana inmediatamente
+                            // Si Super o Alt está presionado y es clic izquierdo (0x110 = BTN_LEFT): arrastrar ventana inmediatamente desde cualquier punto
                             let has_super = keyboard.modifier_state().logo;
-                            if has_super && event.button_code() == 0x110 {
-                                info!("🚀 Atajo Super + Clic: iniciando arrastre directo de ventana desde {:?}", loc);
+                            let has_alt = keyboard.modifier_state().alt;
+                            if (has_super || has_alt) && event.button_code() == 0x110 {
+                                info!("🚀 Atajo Super/Alt + Clic: iniciando arrastre directo de ventana desde {:?}", loc);
                                 let initial_window_location = loc;
                                 let start_data = smithay::input::pointer::GrabStartData {
                                     focus: None,
@@ -305,49 +306,9 @@ pub fn run_winit() -> Result<()> {
                                     window: window.clone(),
                                     initial_window_location,
                                 };
-                                pointer.set_grab(&mut state, grab, serial, smithay::input::pointer::Focus::Keep);
+                                pointer.set_grab(&mut state, grab, serial, smithay::input::pointer::Focus::Clear);
                             }
                         }
-                    }
-
-                    // Asegurar que el puntero tenga el foco correcto antes de registrar el clic del botón
-                    if !pointer.is_grabbed() {
-                        let layer_focus = {
-                            let layer_map = smithay::desktop::layer_map_for_output(&output);
-                            let under_layer = layer_map.layer_under(Layer::Overlay, point)
-                                .or_else(|| layer_map.layer_under(Layer::Top, point));
-
-                            under_layer.and_then(|layer| {
-                                layer_map.layer_geometry(layer).map(|geo| {
-                                    let local_point = point - geo.loc.to_f64();
-                                    let (surf, sub_loc) = layer
-                                        .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
-                                        .unwrap_or_else(|| (layer.wl_surface().clone(), (0, 0).into()));
-                                    (surf, (geo.loc + sub_loc).to_f64())
-                                })
-                            })
-                        };
-
-                        let pointer_focus = if let Some((surf, focus_loc)) = layer_focus {
-                            Some((surf, focus_loc))
-                        } else if let Some((window, loc)) = state.space.element_under(point) {
-                            let local_point = point - loc.to_f64();
-                            window
-                                .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
-                                .map(|(surf, sub_loc)| (surf, (loc + sub_loc).to_f64()))
-                        } else {
-                            None
-                        };
-
-                        pointer.motion(
-                            &mut state,
-                            pointer_focus,
-                            &MotionEvent {
-                                location: point,
-                                serial,
-                                time: event.time_msec(),
-                            },
-                        );
                     }
 
                     pointer.button(
