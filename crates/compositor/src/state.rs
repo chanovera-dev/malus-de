@@ -328,6 +328,10 @@ impl XdgShellHandler for MalusState {
         let window = smithay::desktop::Window::new_wayland_window(surface.clone());
         surface.send_configure();
         self.space.map_element(window, (50, 50), true);
+        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+        if let Some(kb) = self.seat.get_keyboard() {
+            kb.set_focus(self, Some(surface.wl_surface().clone()), serial);
+        }
     }
 
     fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {}
@@ -445,7 +449,31 @@ impl XdgShellHandler for MalusState {
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         tracing::info!("🗑️ [XdgShell] Ventana toplevel destruida");
-        self.window_restore_geometries.remove(surface.wl_surface());
+        let surf = surface.wl_surface();
+        self.window_restore_geometries.remove(surf);
+
+        let window = self
+            .space
+            .elements()
+            .find(|w| w.toplevel() == Some(&surface) || w.wl_surface().as_deref() == Some(surf))
+            .cloned();
+
+        if let Some(window) = window {
+            self.space.unmap_elem(&window);
+            tracing::info!("🧹 Ventana desmapeada de Space tras destruirse");
+        } else {
+            tracing::warn!("⚠️ No se encontró la ventana en Space al destruir toplevel");
+        }
+
+        self.space.refresh();
+
+        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+        if let Some(kb) = self.seat.get_keyboard() {
+            if kb.current_focus().as_ref() == Some(surf) {
+                let next_surface = self.space.elements().next().and_then(|w| w.wl_surface().map(|s| s.into_owned()));
+                kb.set_focus(self, next_surface, serial);
+            }
+        }
     }
 }
 
@@ -475,15 +503,18 @@ impl WlrLayerShellHandler for MalusState {
     }
 
     fn layer_destroyed(&mut self, surface: LayerSurface) {
-        if let Some((mut map, layer)) = self.space.outputs().find_map(|o| {
-            let map = layer_map_for_output(o);
+        tracing::info!("🗑️ [LayerShell] Layer surface destruida");
+        for output in self.space.outputs() {
+            let mut map = layer_map_for_output(output);
             let layer = map
                 .layers()
                 .find(|&layer| layer.layer_surface() == &surface)
                 .cloned();
-            layer.map(|layer| (map, layer))
-        }) {
-            map.unmap_layer(&layer);
+            if let Some(layer) = layer {
+                map.unmap_layer(&layer);
+                tracing::info!("🧹 Layer surface desmapeada de LayerMap: namespace={}", layer.namespace());
+            }
+            map.cleanup();
         }
 
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();

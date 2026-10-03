@@ -224,12 +224,11 @@ pub fn run_winit() -> Result<()> {
                             .or_else(|| layer_map.layer_under(Layer::Top, point));
 
                         under_layer.and_then(|layer| {
-                            layer_map.layer_geometry(layer).map(|geo| {
+                            layer_map.layer_geometry(layer).and_then(|geo| {
                                 let local_point = point - geo.loc.to_f64();
-                                let (surf, sub_loc) = layer
+                                layer
                                     .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
-                                    .unwrap_or_else(|| (layer.wl_surface().clone(), (0, 0).into()));
-                                (surf, (geo.loc + sub_loc).to_f64())
+                                    .map(|(surf, sub_loc)| (surf, (geo.loc + sub_loc).to_f64()))
                             })
                         })
                     };
@@ -267,23 +266,21 @@ pub fn run_winit() -> Result<()> {
                             let under_layer = layer_map.layer_under(Layer::Overlay, point)
                                 .or_else(|| layer_map.layer_under(Layer::Top, point));
 
-                            if let Some(layer) = under_layer {
-                                info!("🎯 Clic de ratón sobre layer surface: namespace={}, pos={:?}", layer.namespace(), point);
-                                if let Some(geo) = layer_map.layer_geometry(layer) {
+                            under_layer.and_then(|layer| {
+                                layer_map.layer_geometry(layer).and_then(|geo| {
                                     let local_point = point - geo.loc.to_f64();
-                                    layer.surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
-                                        .map(|(surf, _)| surf)
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
+                                    layer
+                                        .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                                        .map(|(surf, _)| (surf, layer.namespace().to_string()))
+                                })
+                            })
                         };
 
-                        if let Some(surf) = layer_surf {
+                        if let Some((surf, ns)) = layer_surf {
+                            info!("🎯 Clic de ratón sobre layer surface: namespace={}, pos={:?}", ns, point);
                             keyboard.set_focus(&mut state, Some(surf), serial);
                         } else if let Some((window, loc)) = state.space.element_under(point) {
+                            info!("🖱️ Clic en ventana regular: button={:#x}, pos={:?}, win_loc={:?}, geo={:?}", event.button_code(), point, loc, window.geometry());
                             let window = window.clone();
                             state.space.raise_element(&window, true);
                             if let Some(surface) = window.wl_surface() {
@@ -308,6 +305,8 @@ pub fn run_winit() -> Result<()> {
                                 };
                                 pointer.set_grab(&mut state, grab, serial, smithay::input::pointer::Focus::Clear);
                             }
+                        } else {
+                            info!("🖱️ Clic en espacio libre del escritorio: button={:#x}, pos={:?}", event.button_code(), point);
                         }
                     }
 
@@ -429,6 +428,10 @@ pub fn run_winit() -> Result<()> {
 
         display.dispatch_clients(&mut state)?;
         state.space.refresh();
+        for output in state.space.outputs() {
+            let mut map = smithay::desktop::layer_map_for_output(output);
+            map.cleanup();
+        }
         display.flush_clients()?;
 
         let _ = backend.submit(Some(&[damage]));
