@@ -260,28 +260,59 @@ pub fn run_winit() -> Result<()> {
                     let is_pressed = event.state() == ButtonState::Pressed;
                     let point = pointer.current_location();
 
-                    if is_pressed {
-                        let layer_surf = {
-                            let layer_map = smithay::desktop::layer_map_for_output(&output);
-                            let under_layer = layer_map.layer_under(Layer::Overlay, point)
-                                .or_else(|| layer_map.layer_under(Layer::Top, point));
+                    let layer_target = {
+                        let layer_map = smithay::desktop::layer_map_for_output(&output);
+                        let under_layer = layer_map.layer_under(Layer::Overlay, point)
+                            .or_else(|| layer_map.layer_under(Layer::Top, point));
 
-                            under_layer.and_then(|layer| {
-                                layer_map.layer_geometry(layer).and_then(|geo| {
-                                    let local_point = point - geo.loc.to_f64();
-                                    layer
-                                        .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
-                                        .map(|(surf, _)| (surf, layer.namespace().to_string()))
-                                })
+                        under_layer.and_then(|layer| {
+                            layer_map.layer_geometry(layer).and_then(|geo| {
+                                let local_point = point - geo.loc.to_f64();
+                                layer
+                                    .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                                    .map(|(surf, sub_loc)| {
+                                        (
+                                            surf.clone(),
+                                            (geo.loc + sub_loc).to_f64(),
+                                            layer.namespace().to_string(),
+                                            layer.can_receive_keyboard_focus(),
+                                        )
+                                    })
                             })
-                        };
+                        })
+                    };
 
-                        if let Some((surf, ns)) = layer_surf {
+                    let (under_target, layer_info, regular_win) = if let Some((surf, focus_loc, ns, can_kb)) = layer_target {
+                        (Some((surf.clone(), focus_loc)), Some((surf, ns, can_kb)), None)
+                    } else if let Some((window, loc)) = state.space.element_under(point) {
+                        let local_point = point - loc.to_f64();
+                        let target = window
+                            .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                            .map(|(surf, sub_loc)| (surf, (loc + sub_loc).to_f64()));
+                        (target, None, Some((window.clone(), loc)))
+                    } else {
+                        (None, None, None)
+                    };
+
+                    // Sincronizar foco del puntero antes de procesar el botón para que el cliente reciba enter/button
+                    pointer.motion(
+                        &mut state,
+                        under_target,
+                        &MotionEvent {
+                            location: point,
+                            serial,
+                            time: event.time_msec(),
+                        },
+                    );
+
+                    if is_pressed {
+                        if let Some((surf, ns, can_kb)) = layer_info {
                             info!("🎯 Clic de ratón sobre layer surface: namespace={}, pos={:?}", ns, point);
-                            keyboard.set_focus(&mut state, Some(surf), serial);
-                        } else if let Some((window, loc)) = state.space.element_under(point) {
+                            if can_kb {
+                                keyboard.set_focus(&mut state, Some(surf), serial);
+                            }
+                        } else if let Some((window, loc)) = regular_win {
                             info!("🖱️ Clic en ventana regular: button={:#x}, pos={:?}, win_loc={:?}, geo={:?}", event.button_code(), point, loc, window.geometry());
-                            let window = window.clone();
                             state.space.raise_element(&window, true);
                             if let Some(surface) = window.wl_surface() {
                                 keyboard.set_focus(&mut state, Some(surface.into_owned()), serial);

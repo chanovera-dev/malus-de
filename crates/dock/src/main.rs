@@ -213,6 +213,7 @@ fn create_dock_item(app_def: &DockAppDef) -> GtkBox {
     let btn = Button::builder()
         .css_classes(["dock-item-btn"])
         .tooltip_text(app_def.name)
+        .focusable(false)
         .build();
 
     let icon = Image::builder()
@@ -233,10 +234,21 @@ fn create_dock_item(app_def: &DockAppDef) -> GtkBox {
                 command.env("WAYLAND_DISPLAY", wayland_disp);
             }
             command.env("GDK_BACKEND", "wayland");
-            if let Ok(mut child) = command.spawn() {
-                std::thread::spawn(move || {
-                    let _ = child.wait();
-                });
+            command.env("GSK_RENDERER", "cairo");
+            if let Ok(xdg_rt) = std::env::var("XDG_RUNTIME_DIR") {
+                command.env("XDG_RUNTIME_DIR", xdg_rt);
+            }
+            match command.spawn() {
+                Ok(mut child) => {
+                    let pid = child.id();
+                    info!("🚀 Proceso iniciado para {}: PID={}", name, pid);
+                    std::thread::spawn(move || {
+                        let _ = child.wait();
+                    });
+                }
+                Err(err) => {
+                    tracing::error!("❌ Error al lanzar aplicación {} desde Dock: {:?}", name, err);
+                }
             }
         }
     });

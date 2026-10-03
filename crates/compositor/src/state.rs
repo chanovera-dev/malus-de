@@ -474,6 +474,26 @@ impl XdgShellHandler for MalusState {
                 kb.set_focus(self, next_surface, serial);
             }
         }
+
+        if let Some(pointer) = self.seat.get_pointer() {
+            if pointer.is_grabbed() {
+                pointer.unset_grab(self, serial, 0);
+            }
+            if pointer.current_focus().as_ref() == Some(surf) {
+                let loc = pointer.current_location();
+                pointer.motion(
+                    self,
+                    None,
+                    &smithay::input::pointer::MotionEvent {
+                        location: loc,
+                        serial,
+                        time: 0,
+                    },
+                );
+                pointer.frame(self);
+                tracing::info!("🧹 Foco de puntero limpiado tras destruirse ventana");
+            }
+        }
     }
 }
 
@@ -521,6 +541,26 @@ impl WlrLayerShellHandler for MalusState {
         if let Some(kb) = self.seat.get_keyboard() {
             let top_win_surface = self.space.elements().next().and_then(|w| w.wl_surface().map(|s| s.into_owned()));
             kb.set_focus(self, top_win_surface, serial);
+        }
+
+        if let Some(pointer) = self.seat.get_pointer() {
+            if pointer.is_grabbed() {
+                pointer.unset_grab(self, serial, 0);
+            }
+            if pointer.current_focus().as_ref() == Some(surface.wl_surface()) {
+                let loc = pointer.current_location();
+                pointer.motion(
+                    self,
+                    None,
+                    &smithay::input::pointer::MotionEvent {
+                        location: loc,
+                        serial,
+                        time: 0,
+                    },
+                );
+                pointer.frame(self);
+                tracing::info!("🧹 Foco de puntero limpiado tras destruirse layer surface");
+            }
         }
     }
 }

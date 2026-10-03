@@ -121,7 +121,7 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
                 crate::state::snap_window(data, &self.window, mode, zone);
             }
 
-            handle.unset_grab(self, data, event.serial, event.time, true);
+            handle.unset_grab(self, data, event.serial, event.time, false);
         }
     }
 
