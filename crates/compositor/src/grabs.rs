@@ -7,6 +7,7 @@ use smithay::{
         GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle, RelativeMotionEvent,
     },
     utils::{Logical, Point, Rectangle},
+    wayland::seat::WaylandFocus,
 };
 
 use crate::state::MalusState;
@@ -36,6 +37,60 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
 
         data.space
             .map_element(self.window.clone(), new_location.to_i32_round(), true);
+
+        // Actualizar overlay de previsualización Aero Snap en tiempo real
+        let cur_loc = event.location;
+        let win_loc: Point<i32, Logical> = new_location.to_i32_round();
+        let win_geo = self.window.geometry();
+
+        let preview = data.space.outputs().next().and_then(|output| {
+            let (zone, output_geo) = {
+                let layer_map = smithay::desktop::layer_map_for_output(output);
+                (layer_map.non_exclusive_zone(), data.space.output_geometry(output).unwrap_or_default())
+            };
+            let usable_zone = if zone.size.w > 0 && zone.size.h > 0 {
+                zone
+            } else {
+                Rectangle::new(
+                    (0, 32).into(),
+                    (output_geo.size.w, output_geo.size.h - 32).into(),
+                )
+            };
+
+            let cursor_margin = 80.0;
+            let window_margin = 60;
+            let top_margin = 100.0;
+
+            let is_top_edge = cur_loc.y <= (output_geo.loc.y + usable_zone.loc.y) as f64 + top_margin
+                || win_loc.y <= (output_geo.loc.y + usable_zone.loc.y + window_margin);
+
+            let is_left_edge = cur_loc.x <= (output_geo.loc.x as f64 + cursor_margin)
+                || win_loc.x <= (output_geo.loc.x + window_margin);
+
+            let is_right_edge = cur_loc.x >= (output_geo.loc.x + output_geo.size.w) as f64 - cursor_margin
+                || (win_loc.x + win_geo.size.w) >= (output_geo.loc.x + output_geo.size.w - window_margin);
+
+            if is_top_edge {
+                Some(Rectangle::new(
+                    (usable_zone.loc.x + 8, usable_zone.loc.y + 8).into(),
+                    (usable_zone.size.w - 16, usable_zone.size.h - 16).into(),
+                ))
+            } else if is_left_edge {
+                Some(Rectangle::new(
+                    (usable_zone.loc.x + 8, usable_zone.loc.y + 8).into(),
+                    (usable_zone.size.w / 2 - 16, usable_zone.size.h - 16).into(),
+                ))
+            } else if is_right_edge {
+                Some(Rectangle::new(
+                    (usable_zone.loc.x + usable_zone.size.w / 2 + 8, usable_zone.loc.y + 8).into(),
+                    (usable_zone.size.w - usable_zone.size.w / 2 - 16, usable_zone.size.h - 16).into(),
+                ))
+            } else {
+                None
+            }
+        });
+
+        data.snap_preview = preview;
     }
 
     fn relative_motion(
@@ -59,6 +114,9 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
     ) {
         handle.button(data, event);
         if handle.current_pressed().is_empty() {
+            // Limpiar previsualización inmediatamente al soltar
+            data.snap_preview = None;
+
             let cur_loc = handle.current_location();
             let win_loc = data.space.element_location(&self.window).unwrap_or_default();
             let win_geo = self.window.geometry();
@@ -83,17 +141,18 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
                     )
                 };
 
-                let cursor_margin = 40.0;
-                let window_margin = 25;
+                let cursor_margin = 80.0;
+                let window_margin = 60;
+                let top_margin = 100.0;
+
+                let is_top_edge = cur_loc.y <= (output_geo.loc.y + usable_zone.loc.y) as f64 + top_margin
+                    || win_loc.y <= (output_geo.loc.y + usable_zone.loc.y + window_margin);
 
                 let is_left_edge = cur_loc.x <= (output_geo.loc.x as f64 + cursor_margin)
                     || win_loc.x <= (output_geo.loc.x + window_margin);
 
                 let is_right_edge = cur_loc.x >= (output_geo.loc.x + output_geo.size.w) as f64 - cursor_margin
                     || (win_loc.x + win_geo.size.w) >= (output_geo.loc.x + output_geo.size.w - window_margin);
-
-                let is_top_edge = cur_loc.y <= (output_geo.loc.y + usable_zone.loc.y) as f64 + cursor_margin
-                    || win_loc.y <= (output_geo.loc.y + usable_zone.loc.y + window_margin);
 
                 tracing::info!(
                     "🔍 Aero Snap evaluación: left={}, right={}, top={}, output_geo={:?}, usable_zone={:?}",
@@ -119,6 +178,25 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
             }
 
             handle.unset_grab(self, data, event.serial, event.time, true);
+
+            // Restaurar inmediatamente el foco de hover del puntero sobre la ventana
+            let point = handle.current_location();
+            let under_element = data.space.element_under(point).map(|(w, loc)| {
+                let local_point = point - loc.to_f64();
+                let (surf, sub_loc) = w
+                    .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                    .unwrap_or_else(|| (w.wl_surface().unwrap().into_owned(), (0, 0).into()));
+                (surf, (loc + sub_loc).to_f64())
+            });
+            handle.motion(
+                data,
+                under_element,
+                &smithay::input::pointer::MotionEvent {
+                    location: point,
+                    serial: event.serial,
+                    time: event.time,
+                },
+            );
         }
     }
 

@@ -351,9 +351,49 @@ pub fn run_winit() -> Result<()> {
                                     window: window.clone(),
                                     initial_window_location,
                                 };
-                                pointer.set_grab(&mut state, grab, serial, smithay::input::pointer::Focus::Clear);
+                                pointer.set_grab(&mut state, grab, serial, smithay::input::pointer::Focus::Keep);
                             }
                         }
+                    }
+
+                    // Asegurar que el puntero tenga el foco correcto antes de registrar el clic del botón
+                    if !pointer.is_grabbed() {
+                        let layer_focus = {
+                            let layer_map = smithay::desktop::layer_map_for_output(&output);
+                            let under_layer = layer_map.layer_under(Layer::Overlay, point)
+                                .or_else(|| layer_map.layer_under(Layer::Top, point));
+
+                            under_layer.and_then(|layer| {
+                                layer_map.layer_geometry(layer).map(|geo| {
+                                    let local_point = point - geo.loc.to_f64();
+                                    let (surf, sub_loc) = layer
+                                        .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                                        .unwrap_or_else(|| (layer.wl_surface().clone(), (0, 0).into()));
+                                    (surf, (geo.loc + sub_loc).to_f64())
+                                })
+                            })
+                        };
+
+                        let pointer_focus = if let Some((surf, focus_loc)) = layer_focus {
+                            Some((surf, focus_loc))
+                        } else if let Some((window, loc)) = state.space.element_under(point) {
+                            let local_point = point - loc.to_f64();
+                            window
+                                .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                                .map(|(surf, sub_loc)| (surf, (loc + sub_loc).to_f64()))
+                        } else {
+                            None
+                        };
+
+                        pointer.motion(
+                            &mut state,
+                            pointer_focus,
+                            &MotionEvent {
+                                location: point,
+                                serial,
+                                time: event.time_msec(),
+                            },
+                        );
                     }
 
                     pointer.button(
@@ -411,6 +451,33 @@ pub fn run_winit() -> Result<()> {
                 if let Ok(mut frame) = renderer.render(&mut framebuffer, size, Transform::Flipped180) {
                     let _ = frame.clear(dark_acrylic, &[damage]);
                     let _ = draw_render_elements(&mut frame, 1.0, &elements, &[damage]);
+
+                    // Dibujar overlay translúcido Aero Glass de previsualización al arrastrar cerca del borde
+                    if let Some(preview) = state.snap_preview {
+                        let preview_phys = preview.to_physical_precise_round(1.0);
+                        // Fondo azul translúcido (#0078d4 con 35% de opacidad)
+                        let _ = frame.draw_solid(preview_phys, &[damage], Color32F::new(0.0, 0.47, 0.83, 0.35));
+
+                        // Borde resaltado azul de 3px
+                        let border_color = Color32F::new(0.38, 0.72, 1.0, 0.85);
+                        let b_thickness = 3;
+                        let b_top = Rectangle::new(preview_phys.loc, (preview_phys.size.w, b_thickness).into());
+                        let b_bottom = Rectangle::new(
+                            (preview_phys.loc.x, preview_phys.loc.y + preview_phys.size.h - b_thickness).into(),
+                            (preview_phys.size.w, b_thickness).into(),
+                        );
+                        let b_left = Rectangle::new(preview_phys.loc, (b_thickness, preview_phys.size.h).into());
+                        let b_right = Rectangle::new(
+                            (preview_phys.loc.x + preview_phys.size.w - b_thickness, preview_phys.loc.y).into(),
+                            (b_thickness, preview_phys.size.h).into(),
+                        );
+
+                        let _ = frame.draw_solid(b_top, &[damage], border_color);
+                        let _ = frame.draw_solid(b_bottom, &[damage], border_color);
+                        let _ = frame.draw_solid(b_left, &[damage], border_color);
+                        let _ = frame.draw_solid(b_right, &[damage], border_color);
+                    }
+
                     let _ = frame.finish();
                 }
             }

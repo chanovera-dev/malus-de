@@ -61,6 +61,7 @@ pub struct MalusState {
     pub seat: Seat<MalusState>,
     pub space: Space<smithay::desktop::Window>,
     pub window_restore_geometries: HashMap<WlSurface, (Point<i32, Logical>, Size<i32, Logical>)>,
+    pub snap_preview: Option<Rectangle<i32, Logical>>,
     pub socket_name: String,
     pub is_running: bool,
 }
@@ -95,6 +96,7 @@ impl MalusState {
             seat,
             space: Space::default(),
             window_restore_geometries: HashMap::new(),
+            snap_preview: None,
             socket_name: String::new(),
             is_running: true,
         }
@@ -327,7 +329,7 @@ impl XdgShellHandler for MalusState {
         };
 
         self.space.raise_element(&window, true);
-        pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);
+        pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Keep);
         tracing::info!("✅ [XdgShell] MoveSurfaceGrab activado exitosamente para arrastre por título!");
     }
 

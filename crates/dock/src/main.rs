@@ -90,7 +90,7 @@ const PINNED_APPS: &[DockAppDef] = &[
     DockAppDef {
         name: "Archivos",
         icon: "system-file-manager",
-        command: "nautilus",
+        command: "nautilus --new-window",
         is_running: false,
     },
     DockAppDef {
@@ -229,6 +229,10 @@ fn create_dock_item(app_def: &DockAppDef) -> GtkBox {
         if let Some((exe, args)) = parts.split_first() {
             let mut command = Command::new(exe);
             command.args(args);
+            if let Ok(wayland_disp) = std::env::var("WAYLAND_DISPLAY") {
+                command.env("WAYLAND_DISPLAY", wayland_disp);
+            }
+            command.env("GDK_BACKEND", "wayland");
             let _ = command.spawn();
         }
     });
