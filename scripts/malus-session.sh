@@ -4,17 +4,7 @@ set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DIR="$DIR/target/debug"
 
-# Aislar el bus de sesión D-Bus para evitar que apps de instancia única (ej. Nautilus) se redirijan a la sesión GNOME anfitriona
-if [ -z "$MALUS_NESTED_DBUS" ] && which dbus-run-session >/dev/null 2>&1; then
-    export MALUS_NESTED_DBUS=1
-    exec dbus-run-session -- "$0" "$@"
-fi
-
-echo "============================================================"
-echo "🍎 INICIANDO SESIÓN COMPLETA DE MALUS DE (MODO ANIDADO WINIT)"
-echo "============================================================"
-
-# Aislar configuración de usuario de GNOME/GTK para Malus DE
+# Aislar configuración de usuario de GNOME/GTK para Malus DE (macOS: botones a la izquierda)
 export XDG_CONFIG_HOME="$HOME/.config/malus-de"
 export GSETTINGS_BACKEND="keyfile"
 mkdir -p "$XDG_CONFIG_HOME/glib-2.0/settings" "$XDG_CONFIG_HOME/gtk-3.0" "$XDG_CONFIG_HOME/gtk-4.0"
@@ -38,6 +28,19 @@ gtk-decoration-layout=close,minimize,maximize:
 gtk-application-prefer-dark-theme=1
 EOF
 
+# Aislar el bus de sesión D-Bus para evitar que apps de instancia única (ej. Nautilus) se redirijan a la sesión GNOME anfitriona
+if [ -z "$MALUS_NESTED_DBUS" ] && which dbus-run-session >/dev/null 2>&1; then
+    export MALUS_NESTED_DBUS=1
+    exec dbus-run-session -- "$0" "$@"
+fi
+
+# Sincronizar variables con el daemon D-Bus para que los servicios activados (como portales) hereden la configuración aislada
+dbus-update-activation-environment --all 2>/dev/null || true
+
+echo "============================================================"
+echo "🍎 INICIANDO SESIÓN COMPLETA DE MALUS DE (MODO ANIDADO WINIT)"
+echo "============================================================"
+
 # Limpiar procesos previos si existieran
 killall malus-de-compositor malus-de-top-bar malus-de-dock malus-de-spotlight malus-de-wallpaper malus-de-notifications gnome-calculator 2>/dev/null || true
 
@@ -46,12 +49,15 @@ echo "🚀 [1/5] Iniciando Compositor Wayland..."
 "$BIN_DIR/malus-de-compositor" --backend winit &
 COMPOSITOR_PID=$!
 
-
 # Esperar a que el socket Wayland esté listo
 sleep 1.2
 export WAYLAND_DISPLAY="wayland-1"
 export GDK_BACKEND="wayland"
 export GSK_RENDERER="cairo"
+
+# Actualizar el entorno D-Bus con el display Wayland de Malus DE
+dbus-update-activation-environment WAYLAND_DISPLAY GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND 2>/dev/null || true
+
 
 # 2. Iniciar Demonio de Fondo de Pantalla (Layer Background)
 echo "🎨 [2/5] Iniciando Fondo de Pantalla..."

@@ -392,7 +392,10 @@ impl XdgShellHandler for MalusState {
         self.notify_active_app(Some(surface.wl_surface()));
     }
 
-    fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {}
+    fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
+        tracing::info!("✨ [XdgShell] Nueva PopupSurface recibida; enviando configure");
+        let _ = surface.send_configure();
+    }
 
     fn grab(&mut self, _surface: PopupSurface, _seat: WlSeat, _serial: Serial) {}
 
@@ -401,14 +404,10 @@ impl XdgShellHandler for MalusState {
         let seat: Seat<Self> = Seat::from_resource(&seat).unwrap();
         let pointer = seat.get_pointer().unwrap();
 
-        let start_data = pointer.grab_start_data().unwrap_or_else(|| {
-            tracing::info!("ℹ️ [XdgShell] pointer no tenía click grab activo con serial {:?}; usando start_data sintético", serial);
-            smithay::input::pointer::GrabStartData {
-                focus: None,
-                button: 0x110,
-                location: pointer.current_location(),
-            }
-        });
+        let Some(start_data) = pointer.grab_start_data() else {
+            tracing::warn!("⚠️ [XdgShell] move_request ignorado: no hay clic activo de ratón (evitando bloqueo del puntero)");
+            return;
+        };
 
         let Some(window) = self.window_for_surface(surface.wl_surface()) else {
             tracing::warn!("⚠️ [XdgShell] move_request: no se encontró ventana para la superficie");
@@ -496,10 +495,11 @@ impl XdgShellHandler for MalusState {
 
     fn reposition_request(
         &mut self,
-        _surface: PopupSurface,
+        surface: PopupSurface,
         _positioner: PositionerState,
-        _token: u32,
+        token: u32,
     ) {
+        let _ = surface.send_repositioned(token);
     }
 
     fn maximize_request(&mut self, surface: ToplevelSurface) {

@@ -32,6 +32,20 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
         )>,
         event: &MotionEvent,
     ) {
+        if handle.current_pressed().is_empty() {
+            tracing::info!("🛑 ResizeSurfaceGrab: ratón liberado durante motion, restaurando puntero");
+            handle.unset_grab(self, data, event.serial, event.time, false);
+            let cur_loc = event.location;
+            let under_target = data.space.element_under(cur_loc).and_then(|(win, loc)| {
+                let local_point = cur_loc - loc.to_f64();
+                win.surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                    .map(|(surf, sub_loc)| (surf, (loc + sub_loc).to_f64()))
+            });
+            handle.motion(data, under_target, event);
+            handle.frame(data);
+            return;
+        }
+
         handle.motion(data, None, event);
 
         let delta = event.location - self.start_data.location;
@@ -264,6 +278,21 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
         )>,
         event: &MotionEvent,
     ) {
+        if handle.current_pressed().is_empty() {
+            tracing::info!("🛑 MoveSurfaceGrab: ratón liberado durante motion, restaurando puntero");
+            data.snap_preview = None;
+            handle.unset_grab(self, data, event.serial, event.time, false);
+            let cur_loc = event.location;
+            let under_target = data.space.element_under(cur_loc).and_then(|(win, loc)| {
+                let local_point = cur_loc - loc.to_f64();
+                win.surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                    .map(|(surf, sub_loc)| (surf, (loc + sub_loc).to_f64()))
+            });
+            handle.motion(data, under_target, event);
+            handle.frame(data);
+            return;
+        }
+
         // Mientras el grab está activo, ningún cliente tiene foco del puntero
         handle.motion(data, None, event);
 
