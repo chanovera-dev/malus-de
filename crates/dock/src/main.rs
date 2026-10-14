@@ -90,7 +90,7 @@ const PINNED_APPS: &[DockAppDef] = &[
     DockAppDef {
         name: "Archivos",
         icon: "system-file-manager",
-        command: "nautilus --new-window",
+        command: "dbus-run-session nautilus --new-window",
         is_running: false,
     },
     DockAppDef {

@@ -4,6 +4,12 @@ set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DIR="$DIR/target/debug"
 
+# Aislar el bus de sesión D-Bus para evitar que apps de instancia única (ej. Nautilus) se redirijan a la sesión GNOME anfitriona
+if [ -z "$MALUS_NESTED_DBUS" ] && which dbus-run-session >/dev/null 2>&1; then
+    export MALUS_NESTED_DBUS=1
+    exec dbus-run-session -- "$0" "$@"
+fi
+
 echo "============================================================"
 echo "🍎 INICIANDO SESIÓN COMPLETA DE MALUS DE (MODO ANIDADO WINIT)"
 echo "============================================================"

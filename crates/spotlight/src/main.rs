@@ -316,8 +316,26 @@ fn build_spotlight_ui(app: &Application) {
                         info!("Lanzando desde Spotlight: {}", cmd);
                         let parts: Vec<&str> = cmd.split_whitespace().collect();
                         if let Some((exe, args)) = parts.split_first() {
-                            let mut command = Command::new(exe);
-                            command.args(args);
+                            let (final_exe, final_args) = if *exe == "nautilus" {
+                                ("dbus-run-session", vec!["nautilus", "--new-window"])
+                            } else if *exe == "ptyxis" && !args.contains(&"-s") {
+                                ("ptyxis", vec!["-s"])
+                            } else if *exe == "gnome-text-editor" && !args.contains(&"-s") {
+                                ("gnome-text-editor", vec!["-s"])
+                            } else {
+                                (*exe, args.to_vec())
+                            };
+
+                            let mut command = Command::new(final_exe);
+                            command.args(final_args);
+                            if let Ok(wayland_disp) = std::env::var("WAYLAND_DISPLAY") {
+                                command.env("WAYLAND_DISPLAY", wayland_disp);
+                            }
+                            command.env("GDK_BACKEND", "wayland");
+                            command.env("GSK_RENDERER", "cairo");
+                            if let Ok(xdg_rt) = std::env::var("XDG_RUNTIME_DIR") {
+                                command.env("XDG_RUNTIME_DIR", xdg_rt);
+                            }
                             if let Ok(mut child) = command.spawn() {
                                 std::thread::spawn(move || {
                                     let _ = child.wait();
