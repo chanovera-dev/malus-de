@@ -7,7 +7,7 @@ use smithay::{
     input::{Seat, SeatHandler, SeatState},
     output::Output,
     reexports::{
-        wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState,
+        wayland_protocols::xdg::shell::server::xdg_toplevel::{ResizeEdge, State as XdgState},
         wayland_server::{
             backend::{ClientData, ClientId, DisconnectReason},
             protocol::{
@@ -409,6 +409,42 @@ impl XdgShellHandler for MalusState {
         self.space.raise_element(&window, true);
         pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);
         tracing::info!("✅ [XdgShell] MoveSurfaceGrab activado exitosamente para arrastre por título!");
+    }
+
+    fn resize_request(
+        &mut self,
+        surface: ToplevelSurface,
+        seat: WlSeat,
+        serial: Serial,
+        edges: ResizeEdge,
+    ) {
+        tracing::info!("📐 [XdgShell] resize_request recibido del cliente: edges={:?}", edges);
+        let Some(seat) = Seat::from_resource(&seat) else { return };
+        let Some(pointer) = seat.get_pointer() else { return };
+
+        if !pointer.has_grab(serial) {
+            tracing::warn!("⚠️ resize_request rechazado: el puntero no tiene un grab con este serial");
+            return;
+        }
+
+        let Some(window) = self.window_for_surface(surface.wl_surface()) else { return };
+        let start_data = pointer.grab_start_data().unwrap();
+
+        let initial_window_location = self.space.element_location(&window).unwrap_or_default();
+        let initial_window_size = window.geometry().size;
+
+        let grab = crate::grabs::ResizeSurfaceGrab {
+            start_data,
+            window: window.clone(),
+            edges,
+            initial_window_location,
+            initial_window_size,
+            last_window_size: initial_window_size,
+        };
+
+        self.space.raise_element(&window, true);
+        pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);
+        tracing::info!("✅ [XdgShell] ResizeSurfaceGrab activado exitosamente para redimensión de ventana!");
     }
 
     fn reposition_request(

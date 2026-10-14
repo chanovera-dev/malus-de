@@ -36,6 +36,7 @@ use smithay::{
         shell::wlr_layer::Layer,
     },
 };
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge;
 use tracing::{info, warn};
 
 use crate::state::{ClientState, MalusState};
@@ -162,6 +163,32 @@ pub fn run_winit() -> Result<()> {
                                         has_super, has_alt, has_ctrl, sym);
                                     toggle_spotlight(&state.socket_name);
                                     return FilterResult::Intercept(());
+                                }
+
+                                // Atajo Alt + Tab / Super + Tab: conmutador rápido de ventanas (adelante y atrás con Shift)
+                                let is_tab = sym == keysyms::KEY_Tab.into() || sym == keysyms::KEY_ISO_Left_Tab.into() || key == 23;
+                                if (has_alt || has_super) && is_tab {
+                                    let has_shift = modifiers.shift;
+                                    let windows: Vec<_> = state.space.elements().cloned().collect();
+                                    if windows.len() > 1 {
+                                        let target_window = if has_shift {
+                                            windows.first().cloned()
+                                        } else {
+                                            windows.iter().rev().nth(1).cloned()
+                                        };
+
+                                        if let Some(win) = target_window {
+                                            state.space.raise_element(&win, true);
+                                            let serial = SERIAL_COUNTER.next_serial();
+                                            if let Some(surf) = win.wl_surface() {
+                                                if let Some(kb) = state.seat.get_keyboard() {
+                                                    kb.set_focus(state, Some(surf.into_owned()), serial);
+                                                }
+                                            }
+                                            info!("🔀 Alt+Tab: conmutado foco a siguiente ventana (geo={:?})", win.geometry());
+                                            return FilterResult::Intercept(());
+                                        }
+                                    }
                                 }
 
                                 // Atajos de Aero Snap / Tiling estilo Windows 11 (Super o Alt + Flechas)
@@ -334,6 +361,43 @@ pub fn run_winit() -> Result<()> {
                                     start_data,
                                     window: window.clone(),
                                     initial_window_location,
+                                };
+                                pointer.set_grab(&mut state, grab, btn_serial, smithay::input::pointer::Focus::Clear);
+                            }
+
+                            // Si Super o Alt está presionado y es clic derecho (0x111 = BTN_RIGHT): redimensionar ventana directamente desde cualquier punto
+                            if (has_super || has_alt) && event.button_code() == 0x111 {
+                                let initial_window_location = loc;
+                                let initial_window_size = window.geometry().size;
+
+                                let rel_x = point.x - loc.x as f64;
+                                let rel_y = point.y - loc.y as f64;
+                                let w = initial_window_size.w as f64;
+                                let h = initial_window_size.h as f64;
+
+                                let is_right = rel_x >= w / 2.0;
+                                let is_bottom = rel_y >= h / 2.0;
+
+                                let edges = match (is_right, is_bottom) {
+                                    (true, true) => ResizeEdge::BottomRight,
+                                    (false, true) => ResizeEdge::BottomLeft,
+                                    (true, false) => ResizeEdge::TopRight,
+                                    (false, false) => ResizeEdge::TopLeft,
+                                };
+
+                                info!("📐 Atajo Super/Alt + Clic Derecho: iniciando redimensión de ventana ({:?})", edges);
+                                let start_data = smithay::input::pointer::GrabStartData {
+                                    focus: None,
+                                    button: event.button_code(),
+                                    location: point,
+                                };
+                                let grab = crate::grabs::ResizeSurfaceGrab {
+                                    start_data,
+                                    window: window.clone(),
+                                    edges,
+                                    initial_window_location,
+                                    initial_window_size,
+                                    last_window_size: initial_window_size,
                                 };
                                 pointer.set_grab(&mut state, grab, btn_serial, smithay::input::pointer::Focus::Clear);
                             }
