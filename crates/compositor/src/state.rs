@@ -40,6 +40,8 @@ use smithay::{
     },
 };
 
+use malus_de_common::ipc::{IpcBroadcaster, IpcMessage};
+
 #[derive(Default)]
 pub struct ClientState {
     pub compositor_state: CompositorClientState,
@@ -64,6 +66,18 @@ pub struct MalusState {
     pub snap_preview: Option<Rectangle<i32, Logical>>,
     pub socket_name: String,
     pub is_running: bool,
+    pub ipc_broadcaster: IpcBroadcaster,
+}
+
+pub fn toplevel_info(surface: &WlSurface) -> (Option<String>, Option<String>) {
+    smithay::wayland::compositor::with_states(surface, |states| {
+        if let Some(mutex) = states.data_map.get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>() {
+            let role = mutex.lock().unwrap();
+            (role.app_id.clone(), role.title.clone())
+        } else {
+            (None, None)
+        }
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +99,11 @@ impl MalusState {
         let seat = seat_state.new_wl_seat(&dh, "malus-seat-0");
         let data_device_state = DataDeviceState::new::<Self>(&dh);
 
+        let ipc_broadcaster = IpcBroadcaster::new();
+        if let Err(e) = ipc_broadcaster.start_server() {
+            tracing::error!("Error al iniciar servidor IPC: {:?}", e);
+        }
+
         Self {
             display_handle: dh,
             compositor_state,
@@ -99,7 +118,33 @@ impl MalusState {
             snap_preview: None,
             socket_name: String::new(),
             is_running: true,
+            ipc_broadcaster,
         }
+    }
+
+    pub fn notify_running_apps(&self) {
+        let mut apps = Vec::new();
+        for window in self.space.elements() {
+            if let Some(surface) = window.wl_surface() {
+                let (app_id, title) = toplevel_info(&surface);
+                if let Some(id) = app_id {
+                    apps.push(id);
+                }
+                if let Some(t) = title {
+                    apps.push(t);
+                }
+            }
+        }
+        self.ipc_broadcaster.broadcast(&IpcMessage::RunningAppsChanged { running_apps: apps });
+    }
+
+    pub fn notify_active_app(&self, surface: Option<&WlSurface>) {
+        let (app_id, title) = if let Some(surf) = surface {
+            toplevel_info(surf)
+        } else {
+            (None, None)
+        };
+        self.ipc_broadcaster.broadcast(&IpcMessage::ActiveAppChanged { app_id, title });
     }
 
     pub fn window_for_surface(&self, surface: &WlSurface) -> Option<smithay::desktop::Window> {
@@ -343,6 +388,8 @@ impl XdgShellHandler for MalusState {
         if let Some(kb) = self.seat.get_keyboard() {
             kb.set_focus(self, Some(surface.wl_surface().clone()), serial);
         }
+        self.notify_running_apps();
+        self.notify_active_app(Some(surface.wl_surface()));
     }
 
     fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {}
@@ -542,6 +589,26 @@ impl XdgShellHandler for MalusState {
             );
             pointer.frame(self);
             tracing::info!("🧹 Foco de puntero resincronizado tras destruirse ventana");
+        }
+
+        self.notify_running_apps();
+        let focused = self.seat.get_keyboard().and_then(|kb| kb.current_focus());
+        self.notify_active_app(focused.as_ref());
+    }
+
+    fn app_id_changed(&mut self, surface: ToplevelSurface) {
+        self.notify_running_apps();
+        let focused = self.seat.get_keyboard().and_then(|kb| kb.current_focus());
+        if focused.as_ref() == Some(surface.wl_surface()) {
+            self.notify_active_app(Some(surface.wl_surface()));
+        }
+    }
+
+    fn title_changed(&mut self, surface: ToplevelSurface) {
+        self.notify_running_apps();
+        let focused = self.seat.get_keyboard().and_then(|kb| kb.current_focus());
+        if focused.as_ref() == Some(surface.wl_surface()) {
+            self.notify_active_app(Some(surface.wl_surface()));
         }
     }
 }

@@ -14,4 +14,7 @@ zbus.workspace = true
 glib.workspace = true
 gio.workspace = true
 tracing.workspace = true
+serde_json.workspace = true
 anyhow.workspace = true
+async-channel.workspace = true
+

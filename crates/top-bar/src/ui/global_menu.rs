@@ -1,7 +1,7 @@
 use gtk4::prelude::*;
 use gtk4::{Box as GtkBox, Button, Label, MenuButton, Orientation, Popover};
 
-pub fn create_global_menu_widget() -> GtkBox {
+pub fn create_global_menu_widget() -> (GtkBox, Label) {
     let container = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(2)
@@ -79,5 +79,5 @@ pub fn create_global_menu_widget() -> GtkBox {
         container.append(&menu_btn);
     }
 
-    container
+    (container, app_title_label)
 }

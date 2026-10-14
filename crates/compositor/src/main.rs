@@ -9,6 +9,10 @@ fn main() -> anyhow::Result<()> {
     init_logging("malus_de_compositor");
     info!("Iniciando Malus DE Compositor (Smithay Wayland)...");
 
+    if let Err(e) = malus_de_common::config::setup_isolated_session_environment() {
+        tracing::warn!("Aviso al inicializar entorno aislado de configuración: {:?}", e);
+    }
+
     let args: Vec<String> = std::env::args().collect();
     let backend = args.iter().position(|r| r == "--backend")
         .and_then(|i| args.get(i + 1))

@@ -182,8 +182,9 @@ pub fn run_winit() -> Result<()> {
                                             let serial = SERIAL_COUNTER.next_serial();
                                             if let Some(surf) = win.wl_surface() {
                                                 if let Some(kb) = state.seat.get_keyboard() {
-                                                    kb.set_focus(state, Some(surf.into_owned()), serial);
+                                                    kb.set_focus(state, Some(surf.clone().into_owned()), serial);
                                                 }
+                                                state.notify_active_app(Some(&surf));
                                             }
                                             info!("🔀 Alt+Tab: conmutado foco a siguiente ventana (geo={:?})", win.geometry());
                                             return FilterResult::Intercept(());
@@ -343,7 +344,8 @@ pub fn run_winit() -> Result<()> {
                             info!("🖱️ Clic en ventana regular: button={:#x}, pos={:?}, win_loc={:?}, geo={:?}", event.button_code(), point, loc, window.geometry());
                             state.space.raise_element(&window, true);
                             if let Some(surface) = window.wl_surface() {
-                                keyboard.set_focus(&mut state, Some(surface.into_owned()), btn_serial);
+                                keyboard.set_focus(&mut state, Some(surface.clone().into_owned()), btn_serial);
+                                state.notify_active_app(Some(&surface));
                             }
 
                             // Si Super o Alt está presionado y es clic izquierdo (0x110 = BTN_LEFT): arrastrar ventana inmediatamente desde cualquier punto
@@ -403,6 +405,7 @@ pub fn run_winit() -> Result<()> {
                             }
                         } else {
                             info!("🖱️ Clic en espacio libre del escritorio: button={:#x}, pos={:?}", event.button_code(), point);
+                            state.notify_active_app(None);
                         }
                     }
 

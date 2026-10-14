@@ -162,8 +162,38 @@ fn build_ui(app: &Application) {
         .orientation(Orientation::Horizontal)
         .spacing(4)
         .build();
+    let (global_menu, app_title_label) = ui::global_menu::create_global_menu_widget();
     left_box.append(&ui::apple_menu::create_apple_menu());
-    left_box.append(&ui::global_menu::create_global_menu_widget());
+    left_box.append(&global_menu);
+
+    // Escuchar eventos IPC del compositor para actualizar el nombre de la aplicación activa
+    let (tx, rx) = async_channel::unbounded::<malus_de_common::ipc::IpcMessage>();
+    let title_label = app_title_label.clone();
+    glib::spawn_future_local(async move {
+        while let Ok(msg) = rx.recv().await {
+            if let malus_de_common::ipc::IpcMessage::ActiveAppChanged { app_id, title } = msg {
+                let display = format_app_name(app_id.as_deref(), title.as_deref());
+                title_label.set_label(&display);
+            }
+        }
+    });
+
+    std::thread::spawn(move || {
+        let sock_path = malus_de_common::ipc::ipc_socket_path();
+        loop {
+            if let Ok(stream) = std::os::unix::net::UnixStream::connect(&sock_path) {
+                let reader = std::io::BufReader::new(stream);
+                for line in std::io::BufRead::lines(reader) {
+                    if let Ok(line) = line {
+                        if let Ok(msg) = serde_json::from_str::<malus_de_common::ipc::IpcMessage>(&line) {
+                            let _ = tx.send_blocking(msg);
+                        }
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    });
 
     // 2. Zona Central: Espaciador expansible
     let center_spacer = GtkBox::builder()
@@ -187,4 +217,44 @@ fn build_ui(app: &Application) {
 
     window.set_child(Some(&root_box));
     window.present();
+}
+
+fn format_app_name(app_id: Option<&str>, title: Option<&str>) -> String {
+    if let Some(id) = app_id {
+        let lower = id.to_lowercase();
+        if lower.contains("nautilus") {
+            return "Archivos".to_string();
+        } else if lower.contains("calculator") {
+            return "Calculadora".to_string();
+        } else if lower.contains("ptyxis") {
+            return "Terminal".to_string();
+        } else if lower.contains("texteditor") || lower.contains("text-editor") {
+            return "Editor de Texto".to_string();
+        } else if lower.contains("control-center") || lower.contains("settings") {
+            return "Configuración".to_string();
+        }
+    }
+
+    if let Some(t) = title {
+        let trimmed = t.trim();
+        if !trimmed.is_empty() {
+            if let Some((_, last)) = trimmed.rsplit_once(" — ") {
+                return last.trim().to_string();
+            }
+            if let Some((_, last)) = trimmed.rsplit_once(" - ") {
+                return last.trim().to_string();
+            }
+            return trimmed.to_string();
+        }
+    }
+
+    if let Some(id) = app_id {
+        if let Some(last) = id.rsplit('.').next() {
+            if !last.is_empty() {
+                return last.to_string();
+            }
+        }
+    }
+
+    "Malus DE".to_string()
 }

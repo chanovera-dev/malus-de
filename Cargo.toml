@@ -52,6 +52,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "1.0"
 anyhow = "1.0"
+async-channel = "2.3"
+
 
 # Optimizaciones globales de compilación para Release
 [profile.release]

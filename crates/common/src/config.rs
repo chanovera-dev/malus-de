@@ -31,6 +31,61 @@ impl Default for AppearanceConfig {
     }
 }
 
+impl AppearanceConfig {
+    /// Formato de botones de ventana para GNOME / GTK:
+    /// - Izquierda (macOS): `close,minimize,maximize:`
+    /// - Derecha (Windows/GNOME): `:minimize,maximize,close`
+    pub fn button_layout_string(&self) -> &'static str {
+        if self.button_layout_left {
+            "close,minimize,maximize:"
+        } else {
+            ":minimize,maximize,close"
+        }
+    }
+}
+
+use std::path::PathBuf;
+
+/// Inicializa el entorno de configuración aislado para Malus DE en `$HOME/.config/malus-de`.
+/// Configura el backend `keyfile` de GSettings y los archivos `settings.ini` de GTK3/GTK4
+/// con el layout de botones a la macOS (`close,minimize,maximize:`) sin alterar dconf del host.
+pub fn setup_isolated_session_environment() -> std::io::Result<PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let malus_config_dir = PathBuf::from(home).join(".config").join("malus-de");
+
+    // 1. Directorio glib-2.0/settings para el backend GSettings keyfile
+    let keyfile_dir = malus_config_dir.join("glib-2.0").join("settings");
+    std::fs::create_dir_all(&keyfile_dir)?;
+    let keyfile_path = keyfile_dir.join("keyfile");
+    let keyfile_content = r#"[org/gnome/desktop/wm/preferences]
+button-layout='close,minimize,maximize:'
+
+[org/gnome/desktop/interface]
+color-scheme='prefer-dark'
+"#;
+    std::fs::write(keyfile_path, keyfile_content)?;
+
+    // 2. Archivos settings.ini para GTK3 y GTK4
+    let gtk3_dir = malus_config_dir.join("gtk-3.0");
+    std::fs::create_dir_all(&gtk3_dir)?;
+    let gtk_ini_content = r#"[Settings]
+gtk-decoration-layout=close,minimize,maximize:
+gtk-application-prefer-dark-theme=1
+"#;
+    std::fs::write(gtk3_dir.join("settings.ini"), gtk_ini_content)?;
+
+    let gtk4_dir = malus_config_dir.join("gtk-4.0");
+    std::fs::create_dir_all(&gtk4_dir)?;
+    std::fs::write(gtk4_dir.join("settings.ini"), gtk_ini_content)?;
+
+    // Exportar variables en el entorno del proceso actual
+    std::env::set_var("XDG_CONFIG_HOME", &malus_config_dir);
+    std::env::set_var("GSETTINGS_BACKEND", "keyfile");
+
+    Ok(malus_config_dir)
+}
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DockConfig {
     pub position: DockPosition,

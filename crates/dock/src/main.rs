@@ -83,7 +83,7 @@ struct DockAppDef {
     name: &'static str,
     icon: &'static str,
     command: &'static str,
-    is_running: bool,
+    matchers: &'static [&'static str],
 }
 
 const PINNED_APPS: &[DockAppDef] = &[
@@ -91,31 +91,31 @@ const PINNED_APPS: &[DockAppDef] = &[
         name: "Archivos",
         icon: "system-file-manager",
         command: "dbus-run-session nautilus --new-window",
-        is_running: false,
+        matchers: &["nautilus", "archivos", "org.gnome.nautilus"],
     },
     DockAppDef {
         name: "Terminal",
         icon: "utilities-terminal",
         command: "ptyxis -s",
-        is_running: false,
+        matchers: &["ptyxis", "terminal", "org.gnome.ptyxis"],
     },
     DockAppDef {
         name: "Editor de Texto",
         icon: "accessories-text-editor",
         command: "gnome-text-editor -s",
-        is_running: false,
+        matchers: &["texteditor", "text-editor", "gedit", "org.gnome.texteditor"],
     },
     DockAppDef {
         name: "Calculadora",
         icon: "org.gnome.Calculator",
         command: "gnome-calculator",
-        is_running: false,
+        matchers: &["calculator", "calculadora", "org.gnome.calculator"],
     },
     DockAppDef {
         name: "Configuración",
         icon: "preferences-system",
         command: "gnome-control-center",
-        is_running: false,
+        matchers: &["control-center", "settings", "configuración", "configuracion", "org.gnome.settings"],
     },
 ];
 
@@ -180,9 +180,15 @@ fn build_dock_ui(app: &Application) {
         .spacing(4)
         .build();
 
+    let mut dock_indicators = Vec::new();
+
     // 1. Aplicaciones fijadas (Pinned Apps)
     for app_def in PINNED_APPS {
-        dock_bar.append(&create_dock_item(app_def));
+        let (widget, ind) = create_dock_item(app_def, true);
+        dock_bar.append(&widget);
+        if let Some(lbl) = ind {
+            dock_indicators.push((app_def.matchers, lbl));
+        }
     }
 
     // 2. Separador de cristal
@@ -195,15 +201,49 @@ fn build_dock_ui(app: &Application) {
         name: "Papelera",
         icon: "user-trash-symbolic",
         command: "nautilus trash://",
-        is_running: false,
+        matchers: &[],
     };
-    dock_bar.append(&create_dock_item(&trash_def));
+    let (trash_widget, _) = create_dock_item(&trash_def, false);
+    dock_bar.append(&trash_widget);
+
+    // Escuchar eventos IPC del compositor para actualizar los indicadores de ejecución (●)
+    let (tx, rx) = async_channel::unbounded::<malus_de_common::ipc::IpcMessage>();
+    glib::spawn_future_local(async move {
+        while let Ok(msg) = rx.recv().await {
+            if let malus_de_common::ipc::IpcMessage::RunningAppsChanged { running_apps } = msg {
+                for (matchers, indicator) in &dock_indicators {
+                    let is_running = running_apps.iter().any(|running| {
+                        let r_lower = running.to_lowercase();
+                        matchers.iter().any(|m| r_lower.contains(m))
+                    });
+                    indicator.set_opacity(if is_running { 1.0 } else { 0.0 });
+                }
+            }
+        }
+    });
+
+    std::thread::spawn(move || {
+        let sock_path = malus_de_common::ipc::ipc_socket_path();
+        loop {
+            if let Ok(stream) = std::os::unix::net::UnixStream::connect(&sock_path) {
+                let reader = std::io::BufReader::new(stream);
+                for line in std::io::BufRead::lines(reader) {
+                    if let Ok(line) = line {
+                        if let Ok(msg) = serde_json::from_str::<malus_de_common::ipc::IpcMessage>(&line) {
+                            let _ = tx.send_blocking(msg);
+                        }
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    });
 
     window.set_child(Some(&dock_bar));
     window.present();
 }
 
-fn create_dock_item(app_def: &DockAppDef) -> GtkBox {
+fn create_dock_item(app_def: &DockAppDef, has_indicator: bool) -> (GtkBox, Option<Label>) {
     let item_container = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .css_classes(["dock-item-box"])
@@ -238,6 +278,13 @@ fn create_dock_item(app_def: &DockAppDef) -> GtkBox {
             if let Ok(xdg_rt) = std::env::var("XDG_RUNTIME_DIR") {
                 command.env("XDG_RUNTIME_DIR", xdg_rt);
             }
+            if let Ok(cfg_home) = std::env::var("XDG_CONFIG_HOME") {
+                command.env("XDG_CONFIG_HOME", cfg_home);
+            } else if let Ok(home) = std::env::var("HOME") {
+                command.env("XDG_CONFIG_HOME", format!("{}/.config/malus-de", home));
+            }
+            command.env("GSETTINGS_BACKEND", "keyfile");
+
             match command.spawn() {
                 Ok(mut child) => {
                     let pid = child.id();
@@ -255,22 +302,25 @@ fn create_dock_item(app_def: &DockAppDef) -> GtkBox {
 
     item_container.append(&btn);
 
-    // Indicador de app en ejecución (Punto iluminado `•`)
-    if app_def.is_running {
-        let indicator = Label::builder()
+    // Indicador de app en ejecución (Punto iluminado `●`)
+    let indicator = if has_indicator {
+        let ind = Label::builder()
             .label("●")
             .css_classes(["dock-indicator"])
+            .opacity(0.0) // inicialmente apagado
             .build();
-        item_container.append(&indicator);
+        item_container.append(&ind);
+        Some(ind)
     } else {
-        // Espaciador transparente invisible para mantener alineación exacta
         let spacer = Label::builder()
-            .label(" ")
+            .label("●")
             .css_classes(["dock-indicator"])
             .opacity(0.0)
             .build();
         item_container.append(&spacer);
-    }
+        None
+    };
 
-    item_container
+    (item_container, indicator)
 }
+

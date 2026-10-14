@@ -14,6 +14,30 @@ echo "============================================================"
 echo "🍎 INICIANDO SESIÓN COMPLETA DE MALUS DE (MODO ANIDADO WINIT)"
 echo "============================================================"
 
+# Aislar configuración de usuario de GNOME/GTK para Malus DE
+export XDG_CONFIG_HOME="$HOME/.config/malus-de"
+export GSETTINGS_BACKEND="keyfile"
+mkdir -p "$XDG_CONFIG_HOME/glib-2.0/settings" "$XDG_CONFIG_HOME/gtk-3.0" "$XDG_CONFIG_HOME/gtk-4.0"
+cat << 'EOF' > "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile"
+[org/gnome/desktop/wm/preferences]
+button-layout='close,minimize,maximize:'
+
+[org/gnome/desktop/interface]
+color-scheme='prefer-dark'
+EOF
+
+cat << 'EOF' > "$XDG_CONFIG_HOME/gtk-3.0/settings.ini"
+[Settings]
+gtk-decoration-layout=close,minimize,maximize:
+gtk-application-prefer-dark-theme=1
+EOF
+
+cat << 'EOF' > "$XDG_CONFIG_HOME/gtk-4.0/settings.ini"
+[Settings]
+gtk-decoration-layout=close,minimize,maximize:
+gtk-application-prefer-dark-theme=1
+EOF
+
 # Limpiar procesos previos si existieran
 killall malus-de-compositor malus-de-top-bar malus-de-dock malus-de-spotlight malus-de-wallpaper malus-de-notifications gnome-calculator 2>/dev/null || true
 
@@ -21,6 +45,7 @@ killall malus-de-compositor malus-de-top-bar malus-de-dock malus-de-spotlight ma
 echo "🚀 [1/5] Iniciando Compositor Wayland..."
 "$BIN_DIR/malus-de-compositor" --backend winit &
 COMPOSITOR_PID=$!
+
 
 # Esperar a que el socket Wayland esté listo
 sleep 1.2

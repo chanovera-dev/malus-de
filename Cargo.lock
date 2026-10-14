@@ -1523,12 +1523,14 @@ name = "malus-de-dock"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "gio",
  "glib",
  "gtk4",
  "gtk4-layer-shell",
  "libadwaita",
  "malus-de-common",
+ "serde_json",
  "tracing",
 ]
 
@@ -1613,12 +1615,14 @@ name = "malus-de-top-bar"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "gio",
  "glib",
  "gtk4",
  "gtk4-layer-shell",
  "libadwaita",
  "malus-de-common",
+ "serde_json",
  "tracing",
  "zbus",
 ]
