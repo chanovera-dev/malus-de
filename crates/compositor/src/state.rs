@@ -105,7 +105,18 @@ impl MalusState {
     pub fn window_for_surface(&self, surface: &WlSurface) -> Option<smithay::desktop::Window> {
         self.space
             .elements()
-            .find(|window| window.wl_surface().as_deref() == Some(surface))
+            .find(|window| {
+                if window.wl_surface().as_deref() == Some(surface) {
+                    return true;
+                }
+                let mut found = false;
+                window.with_surfaces(|s, _| {
+                    if s == surface {
+                        found = true;
+                    }
+                });
+                found
+            })
             .cloned()
     }
 }
@@ -469,30 +480,32 @@ impl XdgShellHandler for MalusState {
 
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
         if let Some(kb) = self.seat.get_keyboard() {
-            if kb.current_focus().as_ref() == Some(surf) {
-                let next_surface = self.space.elements().next().and_then(|w| w.wl_surface().map(|s| s.into_owned()));
-                kb.set_focus(self, next_surface, serial);
-            }
+            let next_surface = self.space.elements().rev().find_map(|w| w.wl_surface().map(|s| s.into_owned()));
+            kb.set_focus(self, next_surface, serial);
         }
 
         if let Some(pointer) = self.seat.get_pointer() {
             if pointer.is_grabbed() {
                 pointer.unset_grab(self, serial, 0);
             }
-            if pointer.current_focus().as_ref() == Some(surf) {
-                let loc = pointer.current_location();
-                pointer.motion(
-                    self,
-                    None,
-                    &smithay::input::pointer::MotionEvent {
-                        location: loc,
-                        serial,
-                        time: 0,
-                    },
-                );
-                pointer.frame(self);
-                tracing::info!("🧹 Foco de puntero limpiado tras destruirse ventana");
-            }
+            let loc = pointer.current_location();
+            let new_target = self.space.element_under(loc).and_then(|(win, win_loc)| {
+                let local_point = loc - win_loc.to_f64();
+                win.surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                    .map(|(s, sub_loc)| (s, (win_loc + sub_loc).to_f64()))
+            });
+            let motion_serial = smithay::utils::SERIAL_COUNTER.next_serial();
+            pointer.motion(
+                self,
+                new_target,
+                &smithay::input::pointer::MotionEvent {
+                    location: loc,
+                    serial: motion_serial,
+                    time: 0,
+                },
+            );
+            pointer.frame(self);
+            tracing::info!("🧹 Foco de puntero resincronizado tras destruirse ventana");
         }
     }
 }

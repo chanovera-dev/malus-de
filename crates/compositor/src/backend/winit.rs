@@ -6,8 +6,8 @@ use anyhow::{Context, Result};
 use smithay::{
     backend::{
         input::{
-            AbsolutePositionEvent, ButtonState, Event, InputEvent, KeyState, KeyboardKeyEvent,
-            PointerButtonEvent,
+            AbsolutePositionEvent, Axis, ButtonState, Event, InputEvent, KeyState, KeyboardKeyEvent,
+            PointerAxisEvent, PointerButtonEvent,
         },
         renderer::{
             gles::GlesRenderer,
@@ -19,7 +19,7 @@ use smithay::{
     desktop::space::space_render_elements,
     input::{
         keyboard::{keysyms, FilterResult},
-        pointer::{ButtonEvent, MotionEvent},
+        pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::{
@@ -256,7 +256,6 @@ pub fn run_winit() -> Result<()> {
                     pointer.frame(&mut state);
                 }
                 InputEvent::PointerButton { event } => {
-                    let serial = SERIAL_COUNTER.next_serial();
                     let is_pressed = event.state() == ButtonState::Pressed;
                     let point = pointer.current_location();
 
@@ -295,27 +294,29 @@ pub fn run_winit() -> Result<()> {
                     };
 
                     // Sincronizar foco del puntero antes de procesar el botón para que el cliente reciba enter/button
+                    let motion_serial = SERIAL_COUNTER.next_serial();
                     pointer.motion(
                         &mut state,
                         under_target,
                         &MotionEvent {
                             location: point,
-                            serial,
+                            serial: motion_serial,
                             time: event.time_msec(),
                         },
                     );
 
+                    let btn_serial = SERIAL_COUNTER.next_serial();
                     if is_pressed {
                         if let Some((surf, ns, can_kb)) = layer_info {
                             info!("🎯 Clic de ratón sobre layer surface: namespace={}, pos={:?}", ns, point);
                             if can_kb {
-                                keyboard.set_focus(&mut state, Some(surf), serial);
+                                keyboard.set_focus(&mut state, Some(surf), btn_serial);
                             }
                         } else if let Some((window, loc)) = regular_win {
                             info!("🖱️ Clic en ventana regular: button={:#x}, pos={:?}, win_loc={:?}, geo={:?}", event.button_code(), point, loc, window.geometry());
                             state.space.raise_element(&window, true);
                             if let Some(surface) = window.wl_surface() {
-                                keyboard.set_focus(&mut state, Some(surface.into_owned()), serial);
+                                keyboard.set_focus(&mut state, Some(surface.into_owned()), btn_serial);
                             }
 
                             // Si Super o Alt está presionado y es clic izquierdo (0x110 = BTN_LEFT): arrastrar ventana inmediatamente desde cualquier punto
@@ -334,7 +335,7 @@ pub fn run_winit() -> Result<()> {
                                     window: window.clone(),
                                     initial_window_location,
                                 };
-                                pointer.set_grab(&mut state, grab, serial, smithay::input::pointer::Focus::Clear);
+                                pointer.set_grab(&mut state, grab, btn_serial, smithay::input::pointer::Focus::Clear);
                             }
                         } else {
                             info!("🖱️ Clic en espacio libre del escritorio: button={:#x}, pos={:?}", event.button_code(), point);
@@ -344,13 +345,32 @@ pub fn run_winit() -> Result<()> {
                     pointer.button(
                         &mut state,
                         &ButtonEvent {
-                            serial,
+                            serial: btn_serial,
                             time: event.time_msec(),
                             button: event.button_code(),
                             state: event.state(),
                         },
                     );
                     pointer.frame(&mut state);
+                }
+                InputEvent::PointerAxis { event } => {
+                    let mut frame = AxisFrame::new(event.time_msec()).source(event.source());
+                    if let Some(horizontal) = event.amount(Axis::Horizontal) {
+                        frame = frame.value(Axis::Horizontal, horizontal);
+                        if let Some(discrete) = event.amount_v120(Axis::Horizontal) {
+                            frame = frame.v120(Axis::Horizontal, discrete as i32);
+                        }
+                    }
+                    if let Some(vertical) = event.amount(Axis::Vertical) {
+                        frame = frame.value(Axis::Vertical, vertical);
+                        if let Some(discrete) = event.amount_v120(Axis::Vertical) {
+                            frame = frame.v120(Axis::Vertical, discrete as i32);
+                        }
+                    }
+                    if event.amount(Axis::Horizontal).is_some() || event.amount(Axis::Vertical).is_some() {
+                        pointer.axis(&mut state, frame);
+                        pointer.frame(&mut state);
+                    }
                 }
                 _ => {}
             },

@@ -122,6 +122,24 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
             }
 
             handle.unset_grab(self, data, event.serial, event.time, false);
+
+            // Re-sincronizar foco del puntero inmediatamente sobre la superficie bajo el cursor
+            let under_target = data.space.element_under(cur_loc).and_then(|(win, loc)| {
+                let local_point = cur_loc - loc.to_f64();
+                win.surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                    .map(|(surf, sub_loc)| (surf, (loc + sub_loc).to_f64()))
+            });
+            let motion_serial = smithay::utils::SERIAL_COUNTER.next_serial();
+            handle.motion(
+                data,
+                under_target,
+                &MotionEvent {
+                    location: cur_loc,
+                    serial: motion_serial,
+                    time: event.time,
+                },
+            );
+            handle.frame(data);
         }
     }
 
