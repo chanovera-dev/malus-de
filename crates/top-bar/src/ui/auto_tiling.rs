@@ -10,6 +10,7 @@ pub fn create_auto_tiling_widget() -> Button {
     let btn = Button::builder()
         .css_classes(["tiling-pill", "topbar-btn"])
         .tooltip_text("Modo Ventanas: Flotante (Click para Auto-Tiling Super+Y)")
+        .has_frame(false)
         .build();
 
     let icon = Image::from_icon_name("view-paged-symbolic");

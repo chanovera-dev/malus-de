@@ -51,6 +51,7 @@ pub fn create_power_profile_widget() -> Button {
     let btn = Button::builder()
         .css_classes(["power-profile-pill", "topbar-btn"])
         .tooltip_text("Modo de Rendimiento (power-profiles-daemon)")
+        .has_frame(false)
         .build();
 
     let icon = Image::from_icon_name(PowerMode::Balanced.icon_name());

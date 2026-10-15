@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::os::unix::io::OwnedFd;
 use smithay::{
-    delegate_compositor, delegate_data_device, delegate_layer_shell, delegate_output,
-    delegate_seat, delegate_shm, delegate_xdg_shell,
-    desktop::{layer_map_for_output, Space},
+    delegate_compositor, delegate_data_device, delegate_fractional_scale, delegate_layer_shell,
+    delegate_output, delegate_primary_selection, delegate_seat, delegate_shm, delegate_xdg_shell,
+    desktop::{
+        find_popup_root_surface, layer_map_for_output, PopupKind, PopupManager, Space,
+    },
     input::{Seat, SeatHandler, SeatState},
     output::Output,
     reexports::{
@@ -20,11 +22,13 @@ use smithay::{
     wayland::{
         buffer::BufferHandler,
         compositor::{CompositorClientState, CompositorHandler, CompositorState},
-        output::OutputHandler,
+        fractional_scale::{with_fractional_scale, FractionalScaleHandler, FractionalScaleManagerState},
+        output::{OutputHandler, OutputManagerState},
         selection::{
             data_device::{
                 ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
             },
+            primary_selection::{PrimarySelectionHandler, PrimarySelectionState},
             SelectionHandler,
         },
         shell::{
@@ -40,7 +44,7 @@ use smithay::{
     },
 };
 
-use malus_de_common::ipc::{IpcBroadcaster, IpcMessage};
+use malus_de_common::ipc::{AppSwitcherItem, IpcBroadcaster, IpcMessage};
 
 #[derive(Default)]
 pub struct ClientState {
@@ -52,21 +56,79 @@ impl ClientData for ClientState {
     fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
 }
 
+#[derive(Debug, Clone)]
+pub struct GenieAnimation {
+    pub window_id: u64,
+    pub surface: WlSurface,
+    pub window: smithay::desktop::Window,
+    pub start_time: std::time::Instant,
+    pub duration: std::time::Duration,
+    pub is_minimizing: bool,
+    pub window_rect: Rectangle<i32, Logical>,
+    pub dock_slot_rect: Rectangle<i32, Logical>,
+    pub original_location: Point<i32, Logical>,
+}
+
+/// Estado en memoria del selector de aplicaciones visual (⌘Tab / App Switcher HUD)
+#[derive(Debug, Default, Clone)]
+pub struct AppSwitcherState {
+    pub is_active: bool,
+    pub items: Vec<AppSwitcherItem>,
+    pub selected_index: usize,
+}
+
 pub struct MalusState {
     pub display_handle: DisplayHandle,
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
     pub layer_shell_state: WlrLayerShellState,
+    pub fractional_scale_manager_state: FractionalScaleManagerState,
     pub shm_state: ShmState,
     pub seat_state: SeatState<MalusState>,
     pub data_device_state: DataDeviceState,
+    pub primary_selection_state: PrimarySelectionState,
+    pub output_manager_state: OutputManagerState,
     pub seat: Seat<MalusState>,
     pub space: Space<smithay::desktop::Window>,
+    pub popups: PopupManager,
+    pub active_popups: Vec<PopupSurface>,
     pub window_restore_geometries: HashMap<WlSurface, (Point<i32, Logical>, Size<i32, Logical>)>,
+    pub minimized_windows: HashMap<WlSurface, (smithay::desktop::Window, Point<i32, Logical>)>,
+    pub window_ids: HashMap<WlSurface, u64>,
+    pub next_window_id: u64,
+    pub dock_slots: HashMap<u64, Rectangle<i32, Logical>>,
+    pub active_animations: Vec<GenieAnimation>,
     pub snap_preview: Option<Rectangle<i32, Logical>>,
     pub socket_name: String,
     pub is_running: bool,
     pub ipc_broadcaster: IpcBroadcaster,
+    pub app_switcher: AppSwitcherState,
+    pub cursor_status: smithay::input::pointer::CursorImageStatus,
+}
+
+pub fn guess_icon_name(app_id: &str, title: &str) -> String {
+    let app = app_id.to_lowercase();
+    let tit = title.to_lowercase();
+
+    if app.contains("nautilus") || app.contains("archivos") || tit.contains("archivos") || tit.contains("carpetas") {
+        "system-file-manager".to_string()
+    } else if app.contains("ptyxis") || app.contains("terminal") || tit.contains("terminal") {
+        "utilities-terminal".to_string()
+    } else if app.contains("calculator") || app.contains("calculadora") || tit.contains("calculadora") {
+        "org.gnome.Calculator".to_string()
+    } else if app.contains("texteditor") || app.contains("text-editor") || app.contains("gedit") || tit.contains("editor") {
+        "accessories-text-editor".to_string()
+    } else if app.contains("control-center") || app.contains("settings") || app.contains("configuración") || app.contains("configuracion") {
+        "preferences-system".to_string()
+    } else if app.contains("firefox") {
+        "firefox".to_string()
+    } else if app.contains("chrome") {
+        "google-chrome".to_string()
+    } else if !app.is_empty() {
+        app_id.to_string()
+    } else {
+        "application-x-executable".to_string()
+    }
 }
 
 pub fn toplevel_info(surface: &WlSurface) -> (Option<String>, Option<String>) {
@@ -94,10 +156,13 @@ impl MalusState {
         let compositor_state = CompositorState::new::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
         let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
+        let fractional_scale_manager_state = FractionalScaleManagerState::new::<Self>(&dh);
         let shm_state = ShmState::new::<Self>(&dh, vec![]);
         let mut seat_state = SeatState::new();
         let seat = seat_state.new_wl_seat(&dh, "malus-seat-0");
         let data_device_state = DataDeviceState::new::<Self>(&dh);
+        let primary_selection_state = PrimarySelectionState::new::<Self>(&dh);
+        let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
 
         let ipc_broadcaster = IpcBroadcaster::new();
         if let Err(e) = ipc_broadcaster.start_server() {
@@ -109,17 +174,59 @@ impl MalusState {
             compositor_state,
             xdg_shell_state,
             layer_shell_state,
+            fractional_scale_manager_state,
             shm_state,
             seat_state,
             data_device_state,
+            primary_selection_state,
+            output_manager_state,
             seat,
             space: Space::default(),
+            popups: PopupManager::default(),
+            active_popups: Vec::new(),
             window_restore_geometries: HashMap::new(),
+            minimized_windows: HashMap::new(),
+            window_ids: HashMap::new(),
+            next_window_id: 0,
+            dock_slots: HashMap::new(),
+            active_animations: Vec::new(),
             snap_preview: None,
             socket_name: String::new(),
             is_running: true,
             ipc_broadcaster,
+            app_switcher: AppSwitcherState::default(),
+            cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
         }
+    }
+
+    pub fn get_or_assign_window_id(&mut self, surface: &WlSurface) -> u64 {
+        if let Some(&id) = self.window_ids.get(surface) {
+            id
+        } else {
+            self.next_window_id += 1;
+            let id = self.next_window_id;
+            self.window_ids.insert(surface.clone(), id);
+            id
+        }
+    }
+
+    pub fn notify_minimized_windows(&self) {
+        let mut list = Vec::new();
+        for (surface, _) in &self.minimized_windows {
+            if let Some(&window_id) = self.window_ids.get(surface) {
+                let (app_id, title) = toplevel_info(surface);
+                let app_id_str = app_id.unwrap_or_else(|| "app".to_string());
+                let title_str = title.unwrap_or_else(|| app_id_str.clone());
+                let icon_name = guess_icon_name(&app_id_str, &title_str);
+                list.push(malus_de_common::ipc::MinimizedWindowInfo {
+                    window_id,
+                    app_id: app_id_str,
+                    title: title_str,
+                    icon_name: Some(icon_name),
+                });
+            }
+        }
+        self.ipc_broadcaster.broadcast(&IpcMessage::MinimizedWindowsChanged { windows: list });
     }
 
     pub fn notify_running_apps(&self) {
@@ -135,6 +242,15 @@ impl MalusState {
                 }
             }
         }
+        for (surface, _) in &self.minimized_windows {
+            let (app_id, title) = toplevel_info(surface);
+            if let Some(id) = app_id {
+                apps.push(id);
+            }
+            if let Some(t) = title {
+                apps.push(t);
+            }
+        }
         self.ipc_broadcaster.broadcast(&IpcMessage::RunningAppsChanged { running_apps: apps });
     }
 
@@ -144,7 +260,8 @@ impl MalusState {
         } else {
             (None, None)
         };
-        self.ipc_broadcaster.broadcast(&IpcMessage::ActiveAppChanged { app_id, title });
+        let window_id = surface.and_then(|surf| self.window_ids.get(surf).copied());
+        self.ipc_broadcaster.broadcast(&IpcMessage::ActiveAppChanged { app_id, title, window_id });
     }
 
     pub fn window_for_surface(&self, surface: &WlSurface) -> Option<smithay::desktop::Window> {
@@ -163,6 +280,407 @@ impl MalusState {
                 found
             })
             .cloned()
+            .or_else(|| {
+                self.minimized_windows
+                    .values()
+                    .find(|(win, _)| win.wl_surface().as_deref() == Some(surface))
+                    .map(|(win, _)| win.clone())
+            })
+    }
+
+    pub fn dock_surface_geometry(&self) -> Option<(Rectangle<i32, Logical>, Output)> {
+        for output in self.space.outputs() {
+            let layer_map = layer_map_for_output(output);
+            for layer in layer_map.layers() {
+                if layer.namespace() == "malus-dock" {
+                    if let Some(geo) = layer_map.layer_geometry(layer) {
+                        return Some((geo, output.clone()));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    pub fn restore_window_by_id(&mut self, target_id: u64) -> bool {
+        let entry = self.minimized_windows.iter().find(|(surf, _)| {
+            self.window_ids.get(*surf) == Some(&target_id)
+        }).map(|(surf, _)| surf.clone());
+
+        if let Some(surf) = entry {
+            if self.active_animations.iter().any(|a| a.surface == surf) {
+                tracing::warn!("⚠️ Ventana id={} ya tiene una animación activa; ignorando restauración duplicada", target_id);
+                return false;
+            }
+
+            if let Some((window, loc)) = self.minimized_windows.remove(&surf) {
+                let geo = window.geometry();
+                let dock_slot = self.dock_slots.get(&target_id).cloned().unwrap_or_else(|| {
+                    if let Some((dock_geo, _)) = self.dock_surface_geometry() {
+                        let slot_x = dock_geo.loc.x + (dock_geo.size.w / 2) + 20;
+                        let slot_y = dock_geo.loc.y + (dock_geo.size.h / 2) - 22;
+                        Rectangle::new((slot_x, slot_y).into(), (54, 44).into())
+                    } else {
+                        let output_size = self.space.outputs().next()
+                            .and_then(|o| self.space.output_geometry(o))
+                            .map(|g| g.size)
+                            .unwrap_or_else(|| (1920, 1080).into());
+                        let slot_x = (output_size.w / 2) + 80;
+                        let slot_y = output_size.h - 58;
+                        Rectangle::new((slot_x, slot_y).into(), (54, 44).into())
+                    }
+                });
+
+                // Iniciar animación Genie Effect inversa (expansión desde el Dock)
+                let anim = GenieAnimation {
+                    window_id: target_id,
+                    surface: surf.clone(),
+                    window: window.clone(),
+                    start_time: std::time::Instant::now(),
+                    duration: std::time::Duration::from_millis(480),
+                    is_minimizing: false,
+                    window_rect: Rectangle::new(loc, geo.size),
+                    dock_slot_rect: dock_slot,
+                    original_location: loc,
+                };
+                self.active_animations.push(anim);
+
+                tracing::info!("✨ Iniciando animación de restauración Genie para ventana id={}", target_id);
+                self.notify_running_apps();
+                self.notify_minimized_windows();
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn minimize_toplevel(&mut self, surface: &ToplevelSurface) {
+        tracing::info!("🪟 [XdgShell] minimize_request recibido del cliente");
+        let surf = surface.wl_surface().clone();
+
+        // 1. Evitar minimizar si ya está en la lista de minimizadas
+        if self.minimized_windows.contains_key(&surf) {
+            tracing::warn!("⚠️ Intento de minimizar ventana que ya está minimizada; ignorando");
+            return;
+        }
+
+        // 2. Evitar minimizar si ya tiene una animación activa en curso
+        if self.active_animations.iter().any(|a| a.surface == surf) {
+            tracing::warn!("⚠️ Intento de minimizar ventana con animación en curso; ignorando");
+            return;
+        }
+
+        // 3. Solo minimizar si está mapeada actualmente en Space
+        let target_window = self.space.elements().find(|w| w.wl_surface().as_deref() == Some(&surf)).cloned();
+        if let Some(window) = target_window {
+            let loc = self.space.element_location(&window).unwrap_or_default();
+            let geo = window.geometry();
+            let window_id = self.get_or_assign_window_id(&surf);
+
+            // Determinar slot de destino en el Dock
+            let dock_slot = self.dock_slots.get(&window_id).cloned().unwrap_or_else(|| {
+                if let Some((dock_geo, _)) = self.dock_surface_geometry() {
+                    let slot_x = dock_geo.loc.x + (dock_geo.size.w / 2) + 20;
+                    let slot_y = dock_geo.loc.y + (dock_geo.size.h / 2) - 22;
+                    Rectangle::new((slot_x, slot_y).into(), (54, 44).into())
+                } else {
+                    let output_size = self.space.outputs().next()
+                        .and_then(|o| self.space.output_geometry(o))
+                        .map(|g| g.size)
+                        .unwrap_or_else(|| (1920, 1080).into());
+                    let slot_x = (output_size.w / 2) + 90;
+                    let slot_y = output_size.h - 58;
+                    Rectangle::new((slot_x, slot_y).into(), (54, 44).into())
+                }
+            });
+
+            // Registrar animación Genie Effect (Lámpara de Aladino hacia el Dock)
+            let anim = GenieAnimation {
+                window_id,
+                surface: surf.clone(),
+                window: window.clone(),
+                start_time: std::time::Instant::now(),
+                duration: std::time::Duration::from_millis(480),
+                is_minimizing: true,
+                window_rect: Rectangle::new(loc, geo.size),
+                dock_slot_rect: dock_slot,
+                original_location: loc,
+            };
+            self.active_animations.push(anim);
+
+            self.minimized_windows.insert(surf.clone(), (window.clone(), loc));
+            self.space.unmap_elem(&window);
+
+            let next_focus = self.space.elements().last().and_then(|w| w.wl_surface().map(|s| s.into_owned()));
+            if let Some(kb) = self.seat.get_keyboard() {
+                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                kb.set_focus(self, next_focus.clone(), serial);
+            }
+            if let Some(next_win) = self.space.elements().last() {
+                if let Some(toplevel) = next_win.toplevel() {
+                    toplevel.send_configure();
+                }
+            }
+            self.notify_running_apps();
+            self.notify_minimized_windows();
+            self.notify_active_app(next_focus.as_ref());
+        }
+    }
+
+    pub fn activate_or_restore_app(&mut self, target: &str) -> bool {
+        let target_lower = target.to_lowercase();
+
+        // 1. Verificar si está entre las ventanas minimizadas
+        let minimized_entry = self.minimized_windows.iter().find(|(surf, _)| {
+            let (app_id, title) = toplevel_info(surf);
+            let id_match = app_id.map(|id| id.to_lowercase().contains(&target_lower)).unwrap_or(false);
+            let title_match = title.map(|t| t.to_lowercase().contains(&target_lower)).unwrap_or(false);
+            id_match || title_match
+        }).map(|(surf, _)| surf.clone());
+
+        if let Some(surf) = minimized_entry {
+            if let Some(&id) = self.window_ids.get(&surf) {
+                return self.restore_window_by_id(id);
+            }
+        }
+
+        // 2. Verificar si está entre las ventanas activas en Space
+        let visible_window = self.space.elements().find(|w| {
+            if let Some(surf) = w.wl_surface() {
+                let (app_id, title) = toplevel_info(&surf);
+                let id_match = app_id.map(|id| id.to_lowercase().contains(&target_lower)).unwrap_or(false);
+                let title_match = title.map(|t| t.to_lowercase().contains(&target_lower)).unwrap_or(false);
+                id_match || title_match
+            } else {
+                false
+            }
+        }).cloned();
+
+        if let Some(window) = visible_window {
+            // Si la ventana ya tiene foco y está en primer plano: minimizar con efecto Genie (comportamiento dock estándar)
+            let is_already_focused = self.seat.get_keyboard()
+                .and_then(|kb| kb.current_focus())
+                .map(|focused| {
+                    window.wl_surface().map(|s| s.as_ref() == &focused).unwrap_or(false)
+                })
+                .unwrap_or(false);
+
+            if is_already_focused {
+                if let Some(toplevel) = window.toplevel() {
+                    tracing::info!("📥 Clic en app activa del Dock: minimizando vía Genie Effect");
+                    self.minimize_toplevel(toplevel);
+                    return true;
+                }
+            }
+
+            self.space.raise_element(&window, true);
+            if let Some(toplevel) = window.toplevel() {
+                toplevel.send_configure();
+            }
+            if let Some(surf) = window.wl_surface() {
+                if let Some(kb) = self.seat.get_keyboard() {
+                    let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                    kb.set_focus(self, Some(surf.clone().into_owned()), serial);
+                }
+                self.notify_active_app(Some(&surf));
+            }
+            return true;
+        }
+
+        false
+    }
+
+    pub fn process_ipc_messages(&mut self) {
+        while let Some(msg) = self.ipc_broadcaster.try_recv() {
+            match msg {
+                IpcMessage::ActivateApp { app_id } => {
+                    tracing::info!("📥 IPC ActivateApp recibido para: {}", app_id);
+                    self.activate_or_restore_app(&app_id);
+                }
+                IpcMessage::AnimateRestore { window_id } => {
+                    tracing::info!("📥 IPC AnimateRestore recibido para ventana id={}", window_id);
+                    self.restore_window_by_id(window_id);
+                }
+                IpcMessage::RegisterDockSlot { window_id, x, y, width, height } => {
+                    tracing::info!("📥 IPC RegisterDockSlot recibido: id={}, rect=({}, {}, {}, {})", window_id, x, y, width, height);
+                    let final_rect = if let Some((dock_geo, _)) = self.dock_surface_geometry() {
+                        let (abs_x, abs_y) = if x < dock_geo.size.w && y < dock_geo.size.h {
+                            (dock_geo.loc.x + x, dock_geo.loc.y + y)
+                        } else {
+                            let rel_x = (x - dock_geo.loc.x).clamp(0, (dock_geo.size.w - width as i32).max(0));
+                            let rel_y = (y - dock_geo.loc.y).clamp(0, (dock_geo.size.h - height as i32).max(0));
+                            (dock_geo.loc.x + rel_x, dock_geo.loc.y + rel_y)
+                        };
+                        Rectangle::new((abs_x, abs_y).into(), (width as i32, height as i32).into())
+                    } else {
+                        Rectangle::new((x, y).into(), (width as i32, height as i32).into())
+                    };
+
+                    tracing::info!("🎯 Dock slot ajustado con precisión: id={}, rect={:?}", window_id, final_rect);
+                    self.dock_slots.insert(window_id, final_rect);
+                }
+                IpcMessage::ToggleSpotlight => {
+                    tracing::info!("📥 IPC ToggleSpotlight recibido");
+                    crate::backend::winit::toggle_spotlight(&self.socket_name);
+                }
+                IpcMessage::HideActiveWindow => {
+                    tracing::info!("📥 IPC HideActiveWindow recibido");
+                    self.minimize_active_window();
+                }
+                IpcMessage::CloseActiveWindow => {
+                    tracing::info!("📥 IPC CloseActiveWindow recibido");
+                    self.close_active_window();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub fn get_active_window(&self) -> Option<smithay::desktop::Window> {
+        if let Some(kb) = self.seat.get_keyboard() {
+            if let Some(focus_surf) = kb.current_focus() {
+                if let Some(win) = self.window_for_surface(&focus_surf) {
+                    return Some(win);
+                }
+            }
+        }
+        self.space.elements().last().cloned()
+    }
+
+    pub fn close_active_window(&mut self) {
+        if let Some(win) = self.get_active_window() {
+            if let Some(toplevel) = win.toplevel() {
+                tracing::info!("📤 Cerrando ventana activa vía toplevel.send_close()");
+                toplevel.send_close();
+            }
+        }
+    }
+
+    pub fn minimize_active_window(&mut self) {
+        if let Some(win) = self.get_active_window() {
+            if let Some(toplevel) = win.toplevel().cloned() {
+                tracing::info!("📤 Minimizando ventana activa vía minimize_toplevel()");
+                self.minimize_toplevel(&toplevel);
+            }
+        }
+    }
+
+    pub fn dismiss_all_popups(&mut self) {
+        if self.active_popups.is_empty() {
+            return;
+        }
+        tracing::info!("🧹 Descartando {} popups activos", self.active_popups.len());
+        for popup in self.active_popups.drain(..) {
+            let _ = popup.send_popup_done();
+            if let Ok(root) = find_popup_root_surface(&PopupKind::Xdg(popup.clone())) {
+                let _ = PopupManager::dismiss_popup(&root, &PopupKind::Xdg(popup));
+            }
+        }
+        self.popups.cleanup();
+    }
+
+    /// Construye la lista de elementos para el selector visual de aplicaciones (⌘Tab)
+    pub fn build_app_switcher_items(&mut self) -> Vec<AppSwitcherItem> {
+        let mut items = Vec::new();
+        // 1. Ventanas activas en space, ordenadas de más reciente a más antigua
+        let windows: Vec<_> = self.space.elements().cloned().collect();
+        for win in windows.into_iter().rev() {
+            if let Some(surf) = win.wl_surface() {
+                let window_id = self.get_or_assign_window_id(&surf);
+                let (app_id_opt, title_opt) = toplevel_info(&surf);
+                let app_id = app_id_opt.unwrap_or_else(|| "application-x-executable".to_string());
+                let title = title_opt.unwrap_or_else(|| app_id.clone());
+                let icon_name = guess_icon_name(&app_id, &title);
+                items.push(AppSwitcherItem {
+                    window_id,
+                    app_id,
+                    title,
+                    icon_name: Some(icon_name),
+                    is_minimized: false,
+                });
+            }
+        }
+        // 2. Ventanas minimizadas
+        let min_surfaces: Vec<_> = self.minimized_windows.keys().cloned().collect();
+        for surf in min_surfaces {
+            let window_id = self.get_or_assign_window_id(&surf);
+            let (app_id_opt, title_opt) = toplevel_info(&surf);
+            let app_id = app_id_opt.unwrap_or_else(|| "application-x-executable".to_string());
+            let title = title_opt.unwrap_or_else(|| app_id.clone());
+            let icon_name = guess_icon_name(&app_id, &title);
+            items.push(AppSwitcherItem {
+                window_id,
+                app_id,
+                title,
+                icon_name: Some(icon_name),
+                is_minimized: true,
+            });
+        }
+        items
+    }
+
+    /// Conmuta el foco a la ventana especificada por su window_id (restaurando si está minimizada)
+    pub fn switch_to_window(&mut self, window_id: u64) {
+        tracing::info!("🔀 AppSwitcher: cambiando foco a ventana id={}", window_id);
+        // Si la ventana está minimizada, restaurar con Genie Effect
+        if self.minimized_windows.iter().any(|(s, _)| self.window_ids.get(s) == Some(&window_id)) {
+            self.restore_window_by_id(window_id);
+            return;
+        }
+
+        // Si está en space, traer al frente y enfocar
+        let target = self.space.elements().find(|w| {
+            w.wl_surface().as_ref().and_then(|s| self.window_ids.get(s.as_ref())) == Some(&window_id)
+        }).cloned();
+
+        if let Some(win) = target {
+            self.space.raise_element(&win, true);
+            if let Some(toplevel) = win.toplevel() {
+                toplevel.send_configure();
+            }
+            if let Some(surf) = win.wl_surface() {
+                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                if let Some(kb) = self.seat.get_keyboard() {
+                    kb.set_focus(self, Some(surf.clone().into_owned()), serial);
+                }
+                self.notify_active_app(Some(&surf));
+            }
+        }
+    }
+
+    /// Cierra la ventana especificada por su window_id
+    pub fn close_window_by_id(&mut self, window_id: u64) {
+        tracing::info!("🚪 AppSwitcher: cerrando ventana id={}", window_id);
+        let target = self.space.elements().find(|w| {
+            w.wl_surface().as_ref().and_then(|s| self.window_ids.get(s.as_ref())) == Some(&window_id)
+        }).cloned();
+
+        if let Some(win) = target {
+            if let Some(toplevel) = win.toplevel() {
+                toplevel.send_close();
+            }
+        } else if let Some(surf) = self.minimized_windows.keys().find(|s| self.window_ids.get(*s) == Some(&window_id)).cloned() {
+            if let Some((win, _)) = self.minimized_windows.remove(&surf) {
+                if let Some(toplevel) = win.toplevel() {
+                    toplevel.send_close();
+                }
+                self.notify_minimized_windows();
+            }
+        }
+    }
+
+    /// Oculta / minimiza la ventana especificada por su window_id vía Genie Effect
+    pub fn hide_window_by_id(&mut self, window_id: u64) {
+        tracing::info!("🪟 AppSwitcher: ocultando ventana id={}", window_id);
+        let target = self.space.elements().find(|w| {
+            w.wl_surface().as_ref().and_then(|s| self.window_ids.get(s.as_ref())) == Some(&window_id)
+        }).cloned();
+
+        if let Some(win) = target {
+            if let Some(toplevel) = win.toplevel().cloned() {
+                self.minimize_toplevel(&toplevel);
+            }
+        }
     }
 }
 
@@ -254,6 +772,45 @@ delegate_xdg_shell!(MalusState);
 delegate_layer_shell!(MalusState);
 delegate_output!(MalusState);
 delegate_data_device!(MalusState);
+delegate_primary_selection!(MalusState);
+delegate_fractional_scale!(MalusState);
+
+impl FractionalScaleHandler for MalusState {
+    fn new_fractional_scale(&mut self, surface: WlSurface) {
+        let scale = self.preferred_scale_for_surface(&surface);
+        smithay::wayland::compositor::with_states(&surface, |states| {
+            with_fractional_scale(states, |fractional_scale| {
+                fractional_scale.set_preferred_scale(scale);
+            });
+        });
+    }
+}
+
+impl MalusState {
+    /// Determina la escala fraccionaria preferida para una superficie según el monitor en el que reside
+    pub fn preferred_scale_for_surface(&self, surface: &WlSurface) -> f64 {
+        for window in self.space.elements() {
+            if window.toplevel().map(|t| t.wl_surface() == surface).unwrap_or(false) {
+                if let Some(output) = self.space.outputs_for_element(window).first() {
+                    return match output.current_scale() {
+                        smithay::output::Scale::Fractional(f) => f,
+                        smithay::output::Scale::Integer(i) => i as f64,
+                        _ => 1.0,
+                    };
+                }
+            }
+        }
+        if let Some(output) = self.space.outputs().next() {
+            match output.current_scale() {
+                smithay::output::Scale::Fractional(f) => f,
+                smithay::output::Scale::Integer(i) => i as f64,
+                _ => 1.0,
+            }
+        } else {
+            1.0
+        }
+    }
+}
 
 impl CompositorHandler for MalusState {
     fn compositor_state(&mut self) -> &mut CompositorState {
@@ -266,6 +823,15 @@ impl CompositorHandler for MalusState {
 
     fn commit(&mut self, surface: &WlSurface) {
         smithay::backend::renderer::utils::on_commit_buffer_handler::<Self>(surface);
+        self.popups.commit(surface);
+
+        // Sincronizar escala fraccionaria preferida según el monitor físico en el que reside la superficie
+        let preferred_scale = self.preferred_scale_for_surface(surface);
+        smithay::wayland::compositor::with_states(surface, |states| {
+            smithay::wayland::fractional_scale::with_fractional_scale(states, |fractional_scale| {
+                fractional_scale.set_preferred_scale(preferred_scale);
+            });
+        });
 
         // Si es una ventana regular en Space, actualizamos sus dimensiones internas
         for window in self.space.elements() {
@@ -353,7 +919,9 @@ impl SeatHandler for MalusState {
     }
 
     fn focus_changed(&mut self, _seat: &Seat<Self>, _focused: Option<&WlSurface>) {}
-    fn cursor_image(&mut self, _seat: &Seat<Self>, _image: smithay::input::pointer::CursorImageStatus) {}
+    fn cursor_image(&mut self, _seat: &Seat<Self>, image: smithay::input::pointer::CursorImageStatus) {
+        self.cursor_status = image;
+    }
 }
 
 impl SelectionHandler for MalusState {
@@ -363,6 +931,12 @@ impl SelectionHandler for MalusState {
 impl DataDeviceHandler for MalusState {
     fn data_device_state(&self) -> &DataDeviceState {
         &self.data_device_state
+    }
+}
+
+impl PrimarySelectionHandler for MalusState {
+    fn primary_selection_state(&self) -> &PrimarySelectionState {
+        &self.primary_selection_state
     }
 }
 
@@ -382,6 +956,7 @@ impl XdgShellHandler for MalusState {
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         tracing::info!("✨ Nueva ventana XDG Toplevel recibida y mapeada en Space!");
         let window = smithay::desktop::Window::new_wayland_window(surface.clone());
+        window.set_activated(true);
         surface.send_configure();
         self.space.map_element(window, (50, 50), true);
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
@@ -392,12 +967,43 @@ impl XdgShellHandler for MalusState {
         self.notify_active_app(Some(surface.wl_surface()));
     }
 
-    fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
-        tracing::info!("✨ [XdgShell] Nueva PopupSurface recibida; enviando configure");
-        let _ = surface.send_configure();
+    fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
+        tracing::info!("✨ [XdgShell] Nueva PopupSurface recibida; registrando en PopupManager");
+        surface.with_pending_state(|state| {
+            state.geometry = positioner.get_geometry();
+            state.positioner = positioner;
+        });
+        if self.popups.find_popup(surface.wl_surface()).is_none() {
+            if let Err(err) = self.popups.track_popup(PopupKind::Xdg(surface.clone())) {
+                tracing::warn!("⚠️ Error al registrar popup en PopupManager: {:?}", err);
+            }
+        }
+        if surface.get_parent_surface().is_some() {
+            if let Err(err) = surface.send_configure() {
+                tracing::warn!("⚠️ Error al enviar configure a popup: {:?}", err);
+            }
+        }
+        if !self.active_popups.iter().any(|p| p.wl_surface() == surface.wl_surface()) {
+            self.active_popups.push(surface);
+        }
     }
 
-    fn grab(&mut self, _surface: PopupSurface, _seat: WlSeat, _serial: Serial) {}
+    fn grab(&mut self, surface: PopupSurface, _seat: WlSeat, _serial: Serial) {
+        tracing::info!("🎯 [XdgShell] grab request recibido para popup surface: {:?}", smithay::reexports::wayland_server::Resource::id(surface.wl_surface()));
+        if !self.active_popups.iter().any(|p| p.wl_surface() == surface.wl_surface()) {
+            self.active_popups.push(surface);
+        }
+    }
+
+    fn popup_destroyed(&mut self, surface: PopupSurface) {
+        tracing::info!("🗑️ [XdgShell] Popup surface destruida");
+        let surf = surface.wl_surface();
+        self.active_popups.retain(|p| p.wl_surface() != surf);
+        if let Ok(root) = find_popup_root_surface(&PopupKind::Xdg(surface.clone())) {
+            let _ = PopupManager::dismiss_popup(&root, &PopupKind::Xdg(surface));
+        }
+        self.popups.cleanup();
+    }
 
     fn move_request(&mut self, surface: ToplevelSurface, seat: WlSeat, serial: Serial) {
         tracing::info!("🖱️ [XdgShell] move_request recibido del cliente: serial={:?}", serial);
@@ -496,9 +1102,14 @@ impl XdgShellHandler for MalusState {
     fn reposition_request(
         &mut self,
         surface: PopupSurface,
-        _positioner: PositionerState,
+        positioner: PositionerState,
         token: u32,
     ) {
+        surface.with_pending_state(|state| {
+            let geometry = positioner.get_geometry();
+            state.geometry = geometry;
+            state.positioner = positioner;
+        });
         let _ = surface.send_repositioned(token);
     }
 
@@ -541,10 +1152,18 @@ impl XdgShellHandler for MalusState {
         }
     }
 
+    fn minimize_request(&mut self, surface: ToplevelSurface) {
+        self.minimize_toplevel(&surface);
+    }
+
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         tracing::info!("🗑️ [XdgShell] Ventana toplevel destruida");
         let surf = surface.wl_surface();
         self.window_restore_geometries.remove(surf);
+        self.minimized_windows.remove(surf);
+        self.window_ids.remove(surf);
+        self.active_animations.retain(|a| &a.surface != surf);
+        self.notify_minimized_windows();
 
         let window = self
             .space
@@ -563,7 +1182,13 @@ impl XdgShellHandler for MalusState {
 
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
         if let Some(kb) = self.seat.get_keyboard() {
-            let next_surface = self.space.elements().rev().find_map(|w| w.wl_surface().map(|s| s.into_owned()));
+            let next_win = self.space.elements().rev().next().cloned();
+            let next_surface = next_win.as_ref().and_then(|w| w.wl_surface().map(|s| s.into_owned()));
+            if let Some(ref win) = next_win {
+                if let Some(toplevel) = win.toplevel() {
+                    toplevel.send_configure();
+                }
+            }
             kb.set_focus(self, next_surface, serial);
         }
 
@@ -626,6 +1251,11 @@ impl WlrLayerShellHandler for MalusState {
         namespace: String,
     ) {
         tracing::info!("✨ Nueva Layer Surface recibida: namespace={}", namespace);
+        if namespace == "malus-top-bar" {
+            surface.with_pending_state(|state| {
+                state.size = Some((0, 32).into());
+            });
+        }
         let output = output
             .as_ref()
             .and_then(Output::from_resource)
@@ -635,6 +1265,21 @@ impl WlrLayerShellHandler for MalusState {
             let desktop_surface = smithay::desktop::LayerSurface::new(surface, namespace);
             let mut map = layer_map_for_output(&output);
             let _ = map.map_layer(&desktop_surface);
+        }
+    }
+
+    fn new_popup(&mut self, _parent: LayerSurface, popup: smithay::wayland::shell::xdg::PopupSurface) {
+        tracing::info!("✨ [LayerShell] Nuevo Popup para Layer Surface recibido; registrando en PopupManager");
+        if self.popups.find_popup(popup.wl_surface()).is_none() {
+            if let Err(err) = self.popups.track_popup(PopupKind::Xdg(popup.clone())) {
+                tracing::warn!("⚠️ Error al registrar layer popup en PopupManager: {:?}", err);
+            }
+        }
+        if let Err(err) = popup.send_configure() {
+            tracing::warn!("⚠️ Error al enviar configure a layer popup: {:?}", err);
+        }
+        if !self.active_popups.iter().any(|p| p.wl_surface() == popup.wl_surface()) {
+            self.active_popups.push(popup);
         }
     }
 

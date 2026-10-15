@@ -16,3 +16,4 @@ zbus.workspace = true
 glib.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
+rustix = { version = "0.38", features = ["fs"] }

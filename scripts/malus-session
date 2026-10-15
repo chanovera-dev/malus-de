@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Malus DE Session Wrapper (GDM & TTY Wayland Session Launcher)
+# ==============================================================================
+set -euo pipefail
+
+LOG_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/malus-de"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/session.log"
+
+# Redirigir toda la salida al archivo de registro para diagnóstico
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+echo "============================================================"
+echo "🍎 INICIANDO SESIÓN DE MALUS DE: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "============================================================"
+
+# Localizar binarios: 1) Workspace release, 2) /usr/local/bin, 3) Workspace debug
+PROJECT_DIR="$HOME/Apps/malus-de"
+
+if [ -x "$PROJECT_DIR/target/release/malus-de-compositor" ]; then
+    BIN_DIR="$PROJECT_DIR/target/release"
+elif [ -x "/usr/local/bin/malus-de-compositor" ]; then
+    BIN_DIR="/usr/local/bin"
+elif [ -x "$PROJECT_DIR/target/debug/malus-de-compositor" ]; then
+    BIN_DIR="$PROJECT_DIR/target/debug"
+else
+    echo "❌ Error: No se encontró malus-de-compositor instalado ni compilado."
+    exit 1
+fi
+echo "📍 Utilizando binarios desde: $BIN_DIR"
+
+# ------------------------------------------------------------------------------
+# Configuración del entorno de sesión aislado (macOS UX sin afectar GNOME)
+# ------------------------------------------------------------------------------
+export XDG_CURRENT_DESKTOP="Malus:GNOME"
+export XDG_SESSION_DESKTOP="malus"
+export XDG_SESSION_TYPE="wayland"
+export LIBSEAT_BACKEND="logind"
+
+export XDG_CONFIG_HOME="$HOME/.config/malus-de"
+export GSETTINGS_BACKEND="keyfile"
+export UBUNTU_MENUPROXY=1
+export GTK_MODULES="${GTK_MODULES:+$GTK_MODULES:}appmenu-gtk-module"
+export GDK_BACKEND="wayland"
+export GSK_RENDERER="cairo"
+export QT_QPA_PLATFORM="wayland"
+export SDL_VIDEODRIVER="wayland"
+export CLUTTER_BACKEND="wayland"
+export MOZ_ENABLE_WAYLAND=1
+
+# Hook dinámico de layout de ventanas (Nautilus macOS style)
+if [ -f "$HOME/.config/malus-de/lib/libmalus_gtk_layout.so" ]; then
+    export LD_PRELOAD="$HOME/.config/malus-de/lib/libmalus_gtk_layout.so"
+fi
+
+# Asegurar archivos de configuración aislados de GNOME
+mkdir -p "$XDG_CONFIG_HOME/glib-2.0/settings" "$XDG_CONFIG_HOME/gtk-3.0" "$XDG_CONFIG_HOME/gtk-4.0"
+
+cat << 'EOF' > "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile"
+[org/gnome/desktop/wm/preferences]
+button-layout='close,minimize,maximize:'
+
+[org/gnome/desktop/interface]
+color-scheme='prefer-dark'
+
+[org/gnome/settings-daemon/plugins/xsettings]
+overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
+EOF
+
+cat << 'EOF' > "$XDG_CONFIG_HOME/gtk-3.0/settings.ini"
+[Settings]
+gtk-decoration-layout=close,minimize,maximize:
+gtk-application-prefer-dark-theme=1
+EOF
+
+cat << 'EOF' > "$XDG_CONFIG_HOME/gtk-4.0/settings.ini"
+[Settings]
+gtk-decoration-layout=close,minimize,maximize:
+gtk-application-prefer-dark-theme=1
+EOF
+
+# Sincronizar variables iniciales con el daemon de activación D-Bus
+dbus-update-activation-environment --all 2>/dev/null || true
+
+# ------------------------------------------------------------------------------
+# Limpieza de procesos previos de sesiones anteriores
+# ------------------------------------------------------------------------------
+pkill -f malus-de-top-bar 2>/dev/null || true
+pkill -f malus-de-dock 2>/dev/null || true
+pkill -f malus-de-spotlight 2>/dev/null || true
+pkill -f malus-de-wallpaper 2>/dev/null || true
+pkill -f malus-de-notifications 2>/dev/null || true
+pkill -f malus-de-link 2>/dev/null || true
+
+# ------------------------------------------------------------------------------
+# 1. Iniciar Compositor Wayland Smithay (DRM nativo o Winit anidado)
+# ------------------------------------------------------------------------------
+BACKEND_FLAG="--backend drm"
+if [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${DISPLAY:-}" ]; then
+    echo "🖥️ Detectada sesión gráfica padre: ejecutando compositor en modo anidado (winit)"
+    BACKEND_FLAG="--backend winit"
+else
+    echo "⚡ Sesión directa de hardware (GDM / TTY): ejecutando compositor en modo nativo DRM/KMS"
+fi
+
+"$BIN_DIR/malus-de-compositor" $BACKEND_FLAG &
+COMPOSITOR_PID=$!
+echo "🚀 Compositor iniciado con PID: $COMPOSITOR_PID"
+
+# Esperar a que el socket Wayland esté disponible en /run/user/$UID/
+SOCKET_FOUND=""
+for i in {1..30}; do
+    if [ ! -d "/proc/$COMPOSITOR_PID" ]; then
+        echo "❌ Error: El compositor terminó inesperadamente."
+        exit 1
+    fi
+    for s in /run/user/"$UID"/wayland-[0-9]*; do
+        if [ -S "$s" ]; then
+            SOCKET_FOUND="$(basename "$s")"
+            break 2
+        fi
+    done
+    sleep 0.1
+done
+
+if [ -n "$SOCKET_FOUND" ]; then
+    export WAYLAND_DISPLAY="$SOCKET_FOUND"
+    echo "✅ Socket Wayland detectado y activo: WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
+else
+    export WAYLAND_DISPLAY="wayland-1"
+    echo "⚠️ Socket Wayland no detectado a tiempo, asumiendo WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
+fi
+
+# Actualizar el socket Wayland en el entorno de activación D-Bus
+dbus-update-activation-environment WAYLAND_DISPLAY GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND LD_PRELOAD 2>/dev/null || true
+
+# ------------------------------------------------------------------------------
+# 2. Iniciar Servicios y Componentes del Shell de Malus DE
+# ------------------------------------------------------------------------------
+echo "🎨 [1/5] Iniciando Fondo de Pantalla (malus-de-wallpaper)..."
+"$BIN_DIR/malus-de-wallpaper" &
+WALLPAPER_PID=$!
+
+echo "🍏 [2/5] Iniciando Menú Global & Control Center (malus-de-top-bar)..."
+"$BIN_DIR/malus-de-top-bar" &
+TOPBAR_PID=$!
+
+echo "🛳  [3/5] Iniciando Dock Flotante (malus-de-dock)..."
+"$BIN_DIR/malus-de-dock" &
+DOCK_PID=$!
+
+echo "🔔 [4/5] Iniciando Servidor de Notificaciones D-Bus (malus-de-notifications)..."
+"$BIN_DIR/malus-de-notifications" &
+NOTIF_PID=$!
+
+echo "📡 [5/5] Iniciando Malus Link & AirDrop (malus-de-link)..."
+"$BIN_DIR/malus-de-link" &
+LINK_PID=$!
+
+echo "============================================================"
+echo "✨ SESIÓN DE MALUS DE ACTIVA Y OPERATIVA"
+echo "   PID del Compositor: $COMPOSITOR_PID"
+echo "   Registro de sesión: $LOG_FILE"
+echo "============================================================"
+
+# Manejo de señales de cierre de sesión
+cleanup() {
+    echo ""
+    echo "🛑 Finalizando sesión de Malus DE..."
+    kill "$LINK_PID" 2>/dev/null || true
+    kill "$NOTIF_PID" 2>/dev/null || true
+    kill "$DOCK_PID" 2>/dev/null || true
+    kill "$TOPBAR_PID" 2>/dev/null || true
+    kill "$WALLPAPER_PID" 2>/dev/null || true
+    kill "$COMPOSITOR_PID" 2>/dev/null || true
+    echo "Sesión finalizada limpiamente: $(date '+%Y-%m-%d %H:%M:%S')"
+}
+
+trap cleanup EXIT INT TERM
+
+wait "$COMPOSITOR_PID"

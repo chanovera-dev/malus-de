@@ -67,7 +67,24 @@ fn main() -> Result<()> {
             window.maximize();
         }
 
-        if let Some(ref img_path) = image_path {
+        let resolved_path = image_path.clone().or_else(|| {
+            let config_dir = std::env::var("XDG_CONFIG_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    std::env::var("HOME")
+                        .map(|h| PathBuf::from(h).join(".config/malus-de"))
+                        .unwrap_or_else(|_| PathBuf::from("/etc/malus-de"))
+                });
+            let candidates = [
+                config_dir.join("wallpaper.png"),
+                config_dir.join("wallpaper.jpg"),
+                config_dir.join("wallpaper.jpeg"),
+                config_dir.join("wallpaper.webp"),
+            ];
+            candidates.into_iter().find(|p| p.exists())
+        });
+
+        if let Some(ref img_path) = resolved_path {
             if img_path.exists() {
                 info!("Cargando imagen de fondo: {:?}", img_path);
                 let picture = Picture::for_filename(img_path);

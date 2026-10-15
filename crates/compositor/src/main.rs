@@ -14,10 +14,16 @@ fn main() -> anyhow::Result<()> {
     }
 
     let args: Vec<String> = std::env::args().collect();
+    let default_backend = if std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok() {
+        "winit"
+    } else {
+        "drm"
+    };
+
     let backend = args.iter().position(|r| r == "--backend")
         .and_then(|i| args.get(i + 1))
         .map(|s| s.as_str())
-        .unwrap_or("winit");
+        .unwrap_or(default_backend);
 
     info!("Modo de backend seleccionado: {}", backend);
 
@@ -28,7 +34,7 @@ fn main() -> anyhow::Result<()> {
         }
         "drm" => {
             info!("Iniciando backend DRM/KMS nativo con soporte libinput...");
-            // TODO: Inicialización de sesión directa TTY en Fase 2
+            crate::backend::drm::run_drm()?;
         }
         other => {
             eprintln!("Backend no reconocido: {other}. Usa 'winit' o 'drm'.");

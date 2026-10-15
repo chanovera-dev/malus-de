@@ -2,28 +2,127 @@ use anyhow::Result;
 use malus_de_common::logging::init_logging;
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tracing::{info, warn};
+use zbus::interface;
 
 mod protocol;
 use protocol::NetworkPacket;
 
 const KDE_CONNECT_PORT: u16 = 1716;
 
-#[derive(Clone)]
-struct LinkServer {
-    #[allow(dead_code)]
-    is_running: Arc<AtomicBool>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AirDropMode {
+    Off,
+    ContactsOnly,
+    Everyone,
 }
 
-#[zbus::interface(name = "org.malus_de.Link")]
+impl AirDropMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AirDropMode::Off => "off",
+            AirDropMode::ContactsOnly => "contacts",
+            AirDropMode::Everyone => "everyone",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "everyone" | "todos" => AirDropMode::Everyone,
+            "contacts" | "contactos" => AirDropMode::ContactsOnly,
+            _ => AirDropMode::Off,
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            AirDropMode::Off => "Desactivado",
+            AirDropMode::ContactsOnly => "Solo contactos",
+            AirDropMode::Everyone => "Todos (10 min)",
+        }
+    }
+}
+
+pub struct LinkState {
+    pub airdrop_mode: AirDropMode,
+    pub everyone_until: Option<Instant>,
+}
+
+#[derive(Clone)]
+pub struct LinkServer {
+    pub state: Arc<Mutex<LinkState>>,
+    #[allow(dead_code)]
+    pub is_running: Arc<AtomicBool>,
+}
+
+#[interface(name = "org.malus_de.Link")]
 impl LinkServer {
+    async fn get_airdrop_mode(&self) -> String {
+        let mut st = self.state.lock().unwrap();
+        // Verificar si la visibilidad "Todos" de 10 minutos expiró
+        if st.airdrop_mode == AirDropMode::Everyone {
+            if let Some(until) = st.everyone_until {
+                if Instant::now() >= until {
+                    info!("⏳ Visibilidad temporal 'Todos' expirada. Revertiendo a 'Solo contactos'.");
+                    st.airdrop_mode = AirDropMode::ContactsOnly;
+                    st.everyone_until = None;
+                }
+            }
+        }
+        st.airdrop_mode.as_str().to_string()
+    }
+
+    async fn set_airdrop_mode(&self, mode: String) -> bool {
+        let mut st = self.state.lock().unwrap();
+        let parsed = AirDropMode::from_str(&mode);
+        st.airdrop_mode = parsed;
+        if parsed == AirDropMode::Everyone {
+            st.everyone_until = Some(Instant::now() + Duration::from_secs(600)); // 10 minutos
+            info!("📡 AirDrop configurado a: Todos (activo durante 10 minutos)");
+        } else {
+            st.everyone_until = None;
+            info!("📡 AirDrop configurado a: {:?}", parsed);
+        }
+        true
+    }
+
+    async fn get_airdrop_remaining_seconds(&self) -> u32 {
+        let st = self.state.lock().unwrap();
+        if st.airdrop_mode == AirDropMode::Everyone {
+            if let Some(until) = st.everyone_until {
+                let now = Instant::now();
+                if until > now {
+                    return until.duration_since(now).as_secs() as u32;
+                }
+            }
+        }
+        0
+    }
+
+    async fn simulate_airdrop_receive(&self, sender_name: String, file_name: String) -> bool {
+        info!("📲 [AirDrop] Recibiendo archivo simulado '{}' desde '{}'...", file_name, sender_name);
+        let summary = format!("AirDrop de {}", sender_name);
+        let body = format!("Compartió el archivo '{}'\nGuardado en ~/Descargas", file_name);
+
+        let _ = std::process::Command::new("notify-send")
+            .args([
+                "--app-name=AirDrop",
+                "--icon=network-wireless-hotspot-symbolic",
+                &summary,
+                &body,
+            ])
+            .spawn();
+
+        true
+    }
+
     async fn get_connected_devices(&self) -> Vec<(String, String, u32)> {
         vec![(
-            "device-mobile-01".to_string(),
-            "iPhone / Android".to_string(),
-            88,
+            "device-apple-01".to_string(),
+            "iPhone de Cristian".to_string(),
+            92,
         )]
     }
 
@@ -32,19 +131,23 @@ impl LinkServer {
     }
 
     async fn share_file(&self, device_id: String, path: String) {
-        info!("Compartiendo archivo '{}' con dispositivo '{}' (AirDrop Linux)...", path, device_id);
+        info!("Compartiendo archivo '{}' con dispositivo '{}' vía AirDrop/AWDL...", path, device_id);
     }
 
     async fn sync_clipboard(&self, content: String) {
-        info!("Sincronizando portapapeles hacia móvil (longitud: {})", content.len());
+        info!("Sincronizando portapapeles hacia dispositivo móvil (longitud: {})", content.len());
     }
 }
 
 fn main() -> Result<()> {
     init_logging("malus_de_link");
-    info!("Iniciando Malus Link Daemon (KDE Connect Protocol / Mobile Integration)...");
+    info!("Iniciando Malus Link Daemon (AirDrop Engine & Mobile Integration)...");
 
     let is_running = Arc::new(AtomicBool::new(true));
+    let state = Arc::new(Mutex::new(LinkState {
+        airdrop_mode: AirDropMode::Everyone,
+        everyone_until: Some(Instant::now() + Duration::from_secs(600)),
+    }));
 
     // Descubrimiento UDP en puerto 1716
     let run_udp = is_running.clone();
@@ -58,7 +161,7 @@ fn main() -> Result<()> {
                     if let Ok((len, src)) = socket.recv_from(&mut buf) {
                         if let Ok(text) = std::str::from_utf8(&buf[..len]) {
                             if let Ok(packet) = serde_json::from_str::<NetworkPacket>(text) {
-                                info!("Paquete KDE Connect recibido de {}: {}", src, packet.packet_type);
+                                info!("Paquete recibido de {}: {}", src, packet.packet_type);
                             }
                         }
                     }
@@ -72,6 +175,7 @@ fn main() -> Result<()> {
 
     // Publicar servicio D-Bus org.malus_de.Link
     let s_server = LinkServer {
+        state: state.clone(),
         is_running: is_running.clone(),
     };
 

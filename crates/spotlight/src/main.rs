@@ -317,7 +317,7 @@ fn build_spotlight_ui(app: &Application) {
                         let parts: Vec<&str> = cmd.split_whitespace().collect();
                         if let Some((exe, args)) = parts.split_first() {
                             let (final_exe, final_args) = if *exe == "nautilus" {
-                                ("dbus-run-session", vec!["nautilus", "--new-window"])
+                                ("nautilus", vec!["--new-window"])
                             } else if *exe == "ptyxis" && !args.contains(&"-s") {
                                 ("ptyxis", vec!["-s"])
                             } else if *exe == "gnome-text-editor" && !args.contains(&"-s") {
@@ -336,6 +336,13 @@ fn build_spotlight_ui(app: &Application) {
                             if let Ok(xdg_rt) = std::env::var("XDG_RUNTIME_DIR") {
                                 command.env("XDG_RUNTIME_DIR", xdg_rt);
                             }
+                            if let Ok(cfg_home) = std::env::var("XDG_CONFIG_HOME") {
+                                command.env("XDG_CONFIG_HOME", cfg_home);
+                            } else if let Ok(home) = std::env::var("HOME") {
+                                command.env("XDG_CONFIG_HOME", format!("{}/.config/malus-de", home));
+                            }
+                            command.env("GSETTINGS_BACKEND", "keyfile");
+
                             if let Ok(mut child) = command.spawn() {
                                 std::thread::spawn(move || {
                                     let _ = child.wait();

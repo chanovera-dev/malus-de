@@ -48,6 +48,39 @@ enum Commands {
         #[command(subcommand)]
         action: LinkAction,
     },
+
+    /// Recarga en caliente los componentes de la interfaz de usuario sin cerrar sesión ni ventanas
+    Reload {
+        /// Componente específico a reiniciar (ej: top-bar, dock, notifications, link, o 'all' por defecto)
+        #[arg(short, long)]
+        component: Option<String>,
+    },
+
+    /// Gestiona monitores, escalado fraccionario y enlace físico 1:1 (TrueSize Link)
+    Displays {
+        #[command(subcommand)]
+        action: DisplaysAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum DisplaysAction {
+    /// Muestra el estado físico y matemático de las pantallas conectadas (PPI, dimensiones mm, escala)
+    Status,
+    /// Activa o desactiva el Enlace Físico 1:1 (TrueSize Link)
+    Link {
+        /// 'enable' o 'disable'
+        mode: String,
+    },
+    /// Establece la escala maestra (ej. 1.5, 1.6667, 2.0) y recalcula todas las pantallas 1:1
+    SetScale {
+        scale: f64,
+    },
+    /// Define la diagonal real en pulgadas para una pantalla (ej. 'DP-1 27.0' o 'HDMI-1 24.0')
+    SetDiagonal {
+        connector: String,
+        inches: f64,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -165,6 +198,113 @@ fn main() -> Result<()> {
                 println!("📤 Compartiendo '{}' con el teléfono móvil...", path);
             }
         },
+        Commands::Reload { component } => {
+            let comp = component.as_deref().unwrap_or("all");
+            println!("🔄 Recargando componentes de interfaz de Malus DE (modo: {})...", comp);
+            let bin_dir = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+                .unwrap_or_else(|| std::path::PathBuf::from("/usr/bin"));
+
+            let targets = match comp {
+                "top-bar" | "topbar" => vec!["malus-de-top-bar"],
+                "dock" => vec!["malus-de-dock"],
+                "notifications" => vec!["malus-de-notifications"],
+                "link" => vec!["malus-de-link"],
+                "wallpaper" => vec!["malus-de-wallpaper"],
+                _ => vec![
+                    "malus-de-top-bar",
+                    "malus-de-dock",
+                    "malus-de-notifications",
+                ],
+            };
+
+            for binary in targets {
+                println!("  ↳ Reiniciando {}...", binary);
+                let _ = Command::new("killall").arg("-9").arg(binary).status();
+                let bin_path = bin_dir.join(binary);
+                let exec_cmd = if bin_path.exists() {
+                    bin_path.to_str().unwrap().to_string()
+                } else {
+                    binary.to_string()
+                };
+                let _ = Command::new(&exec_cmd).spawn();
+            }
+            println!("✨ Componentes recargados con éxito sin afectar ventanas ni aplicaciones abiertas.");
+        }
+        Commands::Displays { action } => {
+            let mut cfg = malus_de_common::config::DisplaysConfig::load();
+            match action {
+                DisplaysAction::Status => {
+                    println!("╔═══════════════════════════════════════════════════════════════════════════════╗");
+                    println!("║             🖥  MALUS DE: ESTADO FÍSICO Y MATEMÁTICO DE PANTALLAS              ║");
+                    println!("╚═══════════════════════════════════════════════════════════════════════════════╝");
+                    println!(" 🔗 Enlace Físico 1:1 (TrueSize Link): {}", if cfg.linked_physical_1to1 { "ACTIVADO ✅" } else { "DESACTIVADO ❌" });
+                    println!(" 🎯 Escala Maestra Principal: {:.4} ({:.1}%)", cfg.master_scale, cfg.master_scale * 100.0);
+                    println!("─────────────────────────────────────────────────────────────────────────────────");
+                    for (i, o) in cfg.outputs.iter().enumerate() {
+                        let diag = o.effective_diagonal();
+                        let ppi = o.ppi();
+                        let (w_mm, h_mm) = o.physical_size_mm();
+                        let (lw, lh) = o.logical_size();
+                        let primary_badge = if o.primary { " [PRIMARIO]" } else { "" };
+                        println!(" Monitor #{}: {} ({}){}", i + 1, o.name, o.connector, primary_badge);
+                        println!("   • Panel Físico:   {:.1}\" diagonal | {:.1} x {:.1} mm | {:.2} PPI", diag, w_mm, h_mm, ppi);
+                        println!("   • Resolución:     {}x{} física @ {:.1} Hz", o.width, o.height, o.refresh_rate);
+                        println!("   • Escala Activa:  {:.4}x ({:.1}%)", o.scale, o.scale * 100.0);
+                        println!("   • Espacio Lógico: {}x{} en coords ({}, {})", lw, lh, o.x, o.y);
+                        println!("   • Densidad Real:  100 puntos lógicos = {:.1} mm reales en vidrio", (100.0 * o.scale / ppi) * 25.4);
+                        println!();
+                    }
+                }
+                DisplaysAction::Link { mode } => {
+                    let enable = match mode.to_lowercase().as_str() {
+                        "enable" | "on" | "1" | "true" => true,
+                        _ => false,
+                    };
+                    cfg.linked_physical_1to1 = enable;
+                    if enable {
+                        cfg.apply_1to1_link();
+                        println!("✅ Enlace Físico 1:1 ACTIVADO. Escalas recalculadas en proporción exacta a PPI.");
+                    } else {
+                        println!("❌ Enlace Físico 1:1 DESACTIVADO. Cada monitor ahora tiene escala independiente.");
+                    }
+                    if let Err(e) = cfg.save() {
+                        eprintln!("Error al guardar configuración: {:?}", e);
+                    }
+                }
+                DisplaysAction::SetScale { scale } => {
+                    if scale < 0.5 || scale > 4.0 {
+                        eprintln!("Escala fuera de rango permitido (0.5x - 4.0x): {}", scale);
+                        return Ok(());
+                    }
+                    cfg.set_master_scale(scale);
+                    if let Err(e) = cfg.save() {
+                        eprintln!("Error al guardar configuración: {:?}", e);
+                    }
+                    println!("✨ Escala maestra actualizada a {:.4}x ({:.1}%).", scale, scale * 100.0);
+                    if cfg.linked_physical_1to1 {
+                        for o in &cfg.outputs {
+                            println!("   ↳ {}: {:.4}x ({:.1}%)", o.name, o.scale, o.scale * 100.0);
+                        }
+                    }
+                }
+                DisplaysAction::SetDiagonal { connector, inches } => {
+                    if let Some(o) = cfg.outputs.iter_mut().find(|o| o.connector.eq_ignore_ascii_case(&connector)) {
+                        o.diagonal_inches = Some(inches);
+                        println!("📐 Diagonal del monitor {} actualizada a {:.1} pulgadas.", connector, inches);
+                        if cfg.linked_physical_1to1 {
+                            cfg.apply_1to1_link();
+                        }
+                        if let Err(e) = cfg.save() {
+                            eprintln!("Error al guardar configuración: {:?}", e);
+                        }
+                    } else {
+                        eprintln!("No se encontró monitor con conector '{}'", connector);
+                    }
+                }
+            }
+        }
     }
 
     Ok(())

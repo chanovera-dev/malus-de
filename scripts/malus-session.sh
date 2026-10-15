@@ -2,11 +2,17 @@
 set -e
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN_DIR="$DIR/target/debug"
+if [ -d "$DIR/target/release" ] && [ -x "$DIR/target/release/malus-de-compositor" ]; then
+    BIN_DIR="$DIR/target/release"
+else
+    BIN_DIR="$DIR/target/debug"
+fi
 
 # Aislar configuración de usuario de GNOME/GTK para Malus DE (macOS: botones a la izquierda)
 export XDG_CONFIG_HOME="$HOME/.config/malus-de"
 export GSETTINGS_BACKEND="keyfile"
+export UBUNTU_MENUPROXY=1
+export GTK_MODULES="${GTK_MODULES:+$GTK_MODULES:}appmenu-gtk-module"
 mkdir -p "$XDG_CONFIG_HOME/glib-2.0/settings" "$XDG_CONFIG_HOME/gtk-3.0" "$XDG_CONFIG_HOME/gtk-4.0"
 cat << 'EOF' > "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile"
 [org/gnome/desktop/wm/preferences]
@@ -14,6 +20,9 @@ button-layout='close,minimize,maximize:'
 
 [org/gnome/desktop/interface]
 color-scheme='prefer-dark'
+
+[org/gnome/settings-daemon/plugins/xsettings]
+overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
 EOF
 
 cat << 'EOF' > "$XDG_CONFIG_HOME/gtk-3.0/settings.ini"
@@ -42,7 +51,7 @@ echo "🍎 INICIANDO SESIÓN COMPLETA DE MALUS DE (MODO ANIDADO WINIT)"
 echo "============================================================"
 
 # Limpiar procesos previos si existieran
-killall malus-de-compositor malus-de-top-bar malus-de-dock malus-de-spotlight malus-de-wallpaper malus-de-notifications gnome-calculator 2>/dev/null || true
+killall malus-de-compositor malus-de-top-bar malus-de-dock malus-de-spotlight malus-de-wallpaper malus-de-notifications malus-de-link malus-de-session-lock gnome-calculator 2>/dev/null || true
 
 # 1. Iniciar Compositor Wayland Smithay
 echo "🚀 [1/5] Iniciando Compositor Wayland..."
@@ -54,9 +63,12 @@ sleep 1.2
 export WAYLAND_DISPLAY="wayland-1"
 export GDK_BACKEND="wayland"
 export GSK_RENDERER="cairo"
+if [ -f "$HOME/.config/malus-de/lib/libmalus_gtk_layout.so" ]; then
+    export LD_PRELOAD="$HOME/.config/malus-de/lib/libmalus_gtk_layout.so"
+fi
 
 # Actualizar el entorno D-Bus con el display Wayland de Malus DE
-dbus-update-activation-environment WAYLAND_DISPLAY GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND 2>/dev/null || true
+dbus-update-activation-environment WAYLAND_DISPLAY GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND LD_PRELOAD 2>/dev/null || true
 
 
 # 2. Iniciar Demonio de Fondo de Pantalla (Layer Background)
@@ -79,7 +91,12 @@ echo "🔔 [5/5] Iniciando Servidor de Notificaciones D-Bus..."
 "$BIN_DIR/malus-de-notifications" &
 NOTIF_PID=$!
 
-# 6. Iniciar Aplicación de prueba (Calculadora GNOME)
+# 6. Iniciar Demonio Malus Link & AirDrop (D-Bus org.malus_de.Link)
+echo "📡 [6/6] Iniciando Demonio de Enlace y AirDrop (malus-de-link)..."
+"$BIN_DIR/malus-de-link" &
+LINK_PID=$!
+
+# 7. Iniciar Aplicación de prueba (Calculadora GNOME)
 echo "🧮 Lanzando ventana de prueba (gnome-calculator)..."
 gnome-calculator &
 CALC_PID=$!
@@ -94,6 +111,7 @@ cleanup() {
     echo ""
     echo "🛑 Cerrando sesión de Malus DE..."
     kill "$CALC_PID" 2>/dev/null || true
+    kill "$LINK_PID" 2>/dev/null || true
     kill "$NOTIF_PID" 2>/dev/null || true
     kill "$DOCK_PID" 2>/dev/null || true
     kill "$TOPBAR_PID" 2>/dev/null || true

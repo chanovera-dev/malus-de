@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Malus DE
+Comment=macOS-inspired Wayland Desktop Environment
+Exec=/usr/local/bin/malus-session
+TryExec=/usr/local/bin/malus-session
+Type=Application
+DesktopNames=Malus;GNOME;
+X-GDM-SessionRegisters=true
+X-GDM-CanRunHeadless=false
+Keywords=wayland;desktop;macOS;malus;

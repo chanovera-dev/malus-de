@@ -30,7 +30,19 @@ libadwaita = { version = "0.7", features = ["v1_5"] }
 gtk4-layer-shell = "0.4"
 
 # Wayland Compositor & Smithay
-smithay = { version = "0.7", default-features = false, features = ["backend_winit", "backend_drm", "renderer_glow", "desktop", "wayland_frontend", "xwayland"] }
+smithay = { version = "0.7", default-features = false, features = [
+    "backend_winit",
+    "backend_drm",
+    "backend_egl",
+    "backend_udev",
+    "backend_libinput",
+    "backend_session_libseat",
+    "backend_gbm",
+    "renderer_glow",
+    "desktop",
+    "wayland_frontend",
+    "xwayland",
+] }
 wayland-server = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "server"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client", "server"] }
