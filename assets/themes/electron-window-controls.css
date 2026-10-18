@@ -1,0 +1,140 @@
+/* ==========================================================================
+   Malus DE - macOS Native Traffic Lights Integration for Electron & VS Code
+   ========================================================================== */
+
+/* Ubicar contenedor de controles a la izquierda */
+.monaco-workbench .part.titlebar .window-controls-container {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+    margin-right: 6px !important;
+    width: auto !important;
+    min-width: 66px !important;
+    max-width: 66px !important;
+    height: 100% !important;
+    order: -1 !important;
+    z-index: 3000 !important;
+    -webkit-app-region: no-drag !important;
+    gap: 8px !important;
+    box-sizing: border-box !important;
+}
+
+/* Ocultar icono redundante en el título */
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-left > .window-appicon {
+    display: none !important;
+}
+
+/* Botones circulares estilo macOS */
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon {
+    width: 12px !important;
+    height: 12px !important;
+    min-width: 12px !important;
+    min-height: 12px !important;
+    max-width: 12px !important;
+    max-height: 12px !important;
+    border-radius: 999px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    box-sizing: border-box !important;
+    cursor: pointer !important;
+    transition: filter 120ms ease, transform 120ms ease !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    position: relative !important;
+    opacity: 1 !important;
+}
+
+/* Orden correcto: 1. Cerrar (Rojo), 2. Minimizar (Amarillo), 3. Maximizar (Verde) */
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-close {
+    order: 1 !important;
+    background-color: #ff5f57 !important;
+    border: 0.5px solid rgba(0, 0, 0, 0.20) !important;
+}
+
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-minimize {
+    order: 2 !important;
+    background-color: #febc2e !important;
+    border: 0.5px solid rgba(0, 0, 0, 0.20) !important;
+}
+
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-max-restore {
+    order: 3 !important;
+    background-color: #28c840 !important;
+    border: 0.5px solid rgba(0, 0, 0, 0.20) !important;
+}
+
+/* Ocultar iconos codicon de Windows por defecto */
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon:before {
+    content: "" !important;
+    display: none !important;
+    font-size: 8px !important;
+    font-weight: 800 !important;
+    line-height: 1 !important;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif !important;
+    color: rgba(0, 0, 0, 0.65) !important;
+    text-align: center !important;
+}
+
+/* Efecto hover estilo macOS: mostrar símbolos al pasar el mouse por el grupo */
+.monaco-workbench .part.titlebar .window-controls-container:hover > .window-icon:before {
+    display: block !important;
+}
+
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-close:hover {
+    background-color: #ff7b74 !important;
+    filter: brightness(1.08) !important;
+}
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-close:hover:before {
+    content: "×" !important;
+    font-size: 11px !important;
+    line-height: 10px !important;
+}
+
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-minimize:hover {
+    background-color: #ffd066 !important;
+    filter: brightness(1.08) !important;
+}
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-minimize:hover:before {
+    content: "–" !important;
+    font-size: 10px !important;
+    line-height: 10px !important;
+}
+
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-max-restore:hover {
+    background-color: #52df67 !important;
+    filter: brightness(1.08) !important;
+}
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-max-restore:hover:before {
+    content: "+" !important;
+    font-size: 10px !important;
+    line-height: 10px !important;
+}
+
+/* Estado inactivo desaturado como en macOS */
+.monaco-workbench .part.titlebar.inactive .window-controls-container > .window-icon {
+    background-color: rgba(128, 128, 128, 0.35) !important;
+    border-color: rgba(128, 128, 128, 0.20) !important;
+}
+.monaco-workbench .part.titlebar.inactive .window-controls-container > .window-icon:before {
+    display: none !important;
+}
+
+/* Ocultar cualquier contenedor residual en la derecha */
+.monaco-workbench .part.titlebar > .titlebar-container > .titlebar-right > .window-controls-container {
+    display: none !important;
+}
+
+/* Antigravity Onboarding: Mover botón de ayuda al lado derecho para evitar solapamiento con los controles */
+.antigravity-onboarding .onboarding-menubar {
+    display: flex !important;
+    justify-content: flex-end !important;
+    padding-left: 80px !important;
+    padding-right: 16px !important;
+}
+.antigravity-onboarding .onboarding-menubar .help-tab-button {
+    margin-left: auto !important;
+}

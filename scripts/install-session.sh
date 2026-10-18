@@ -75,12 +75,18 @@ chmod 755 "/usr/local/bin/malus-session"
 echo "   ✔ /usr/local/bin/malus-session"
 
 # 4. Instalar entrada de sesión Wayland para GDM
-echo "🖥️ [4/4] Instalando archivo de sesión para GDM en /usr/share/wayland-sessions/..."
+echo "🖥️ [4/5] Instalando archivo de sesión para GDM en /usr/share/wayland-sessions/..."
 mkdir -p /usr/share/wayland-sessions
 
 cp -f "$SCRIPT_DIR/malus.desktop" "/usr/share/wayland-sessions/malus.desktop"
 chmod 644 "/usr/share/wayland-sessions/malus.desktop"
 echo "   ✔ /usr/share/wayland-sessions/malus.desktop"
+
+# 5. Parchear controles de ventana en aplicaciones Electron instaladas
+echo "🎨 [5/5] Integrando controles macOS en aplicaciones Electron (VS Code, Antigravity)..."
+if [ -f "$SCRIPT_DIR/patch-electron-apps.sh" ]; then
+    bash "$SCRIPT_DIR/patch-electron-apps.sh" || true
+fi
 
 echo ""
 echo "============================================================"
