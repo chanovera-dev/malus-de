@@ -55,7 +55,13 @@ uniform float u_spread;         // Expansión sólida de la sombra
 uniform float u_offset_y;       // Desplazamiento de luz cenital (luz hacia abajo, u_offset_y > 0)
 uniform float u_opacity;        // Opacidad pico de la sombra
 
-// Distancia con signo analítica a un squircle superelíptico (n=4.2)
+// Distancia con signo analítica a un rectángulo con esquinas circulares perfectas (Euclidiana L2)
+float rounded_box_sdf(vec2 p, vec2 b, float r) {
+    vec2 q = abs(p) - b + vec2(r);
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
+}
+
+// Distancia con signo analítica a un squircle superelíptico (n=4.2) para el recorte interior
 float squircle_sdf(vec2 p, vec2 b, float r, float exp_val) {
     vec2 d = abs(p) - b + vec2(r);
     if (d.x <= 0.0 || d.y <= 0.0) {
@@ -82,21 +88,24 @@ void main() {
     }
 
     // 2. Modelo de doble lóbulo estilo macOS (Sequoia / Sonoma):
-    // Luz cenital cenital suave: la sombra cae de ARRIBA hacia ABAJO (+Y).
-    // - Sombra de contacto: nítida, cercana al contorno, offset mínimo, define el marco
-    vec2 contact_center = win_center + vec2(0.0, u_offset_y * 0.22);
+    // Usamos distancia euclidiana L2 pura (rounded_box_sdf) para la difusión de la sombra,
+    // garantizando que las esquinas de la penumbra se abran en abanico circular perfecto
+    // y sin aristas ni picos diagonales.
+    //
+    // - Sombra de contacto: sutil y cercana al contorno
+    vec2 contact_center = win_center + vec2(0.0, u_offset_y * 0.2);
     vec2 p_contact = v_local_px - contact_center;
-    float d_contact = max(squircle_sdf(p_contact, win_half, effective_r, u_exponent), 0.0);
-    float contact_sigma = max(u_blur_radius * 0.25, 2.0);
-    float contact = exp(-pow(d_contact / contact_sigma, 2.0)) * 0.35;
+    float d_contact = max(rounded_box_sdf(p_contact, win_half, effective_r), 0.0);
+    float contact_sigma = max(u_blur_radius * 0.22, 2.0);
+    float contact = exp(-pow(d_contact / contact_sigma, 2.0)) * 0.28;
 
-    // - Sombra ambiental: amplia y etérea penumbra difusa que cae prominentemente hacia abajo
+    // - Sombra ambiental: amplia y etérea penumbra difusa que cae suavemente hacia abajo
     vec2 ambient_center = win_center + vec2(0.0, u_offset_y);
     vec2 p_ambient = v_local_px - ambient_center;
     vec2 ambient_half = win_half + vec2(u_spread);
-    float d_ambient = max(squircle_sdf(p_ambient, ambient_half, effective_r + u_spread, u_exponent), 0.0);
-    float ambient_sigma = max(u_blur_radius, 4.0);
-    float ambient = exp(-pow(d_ambient / ambient_sigma, 1.45)) * 0.65;
+    float d_ambient = max(rounded_box_sdf(p_ambient, ambient_half, effective_r + u_spread), 0.0);
+    float ambient_sigma = max(u_blur_radius * 0.85, 6.0);
+    float ambient = exp(-pow(d_ambient / ambient_sigma, 2.0)) * 0.72;
 
     float shadow_intensity = contact + ambient;
     float final_alpha = shadow_intensity * u_opacity * inner_mask;
@@ -193,32 +202,30 @@ impl WindowShadowPipeline {
         }
 
         // Parámetros de sombra calibrados con fidelidad estética macOS Sequoia / Sonoma:
-        // - Opacidad sutil, delicada y etérea (~0.26 activa, ~0.15 inactiva)
-        // - Luz cenital superior: la sombra se proyecta hacia abajo (offset_y positivo)
-        // - Penumbra amplia y suave que aporta sensación de flotabilidad tridimensional
+        // - Opacidad sutil, etérea y sin densidad excesiva (~0.18 activa, ~0.10 inactiva)
+        // - Luz cenital superior: la sombra se proyecta suavemente hacia abajo (offset_y)
+        // - Penumbra amplia y circular que aporta flotabilidad tridimensional limpia y orgánica
         let (blur_radius, spread, offset_y, opacity) = if is_active {
             (
-                42.0 * scale as f32,
-                2.5 * scale as f32,
-                14.0 * scale as f32,
-                0.26f32,
+                46.0 * scale as f32,
+                0.0f32,
+                12.0 * scale as f32,
+                0.18f32,
             )
         } else {
             (
-                22.0 * scale as f32,
-                1.0 * scale as f32,
-                6.0 * scale as f32,
-                0.15f32,
+                24.0 * scale as f32,
+                0.0f32,
+                5.0 * scale as f32,
+                0.10f32,
             )
         };
 
         // Expansión del quad de sombra para dar margen completo a la penumbra difusa:
         // Puesto que la luz viene de arriba, la sombra cae hacia abajo (+Y):
-        // - pad_y_top requiere menor expansión
-        // - pad_y_bottom requiere mayor expansión para alojar la caída de la sombra
-        let pad_x = (blur_radius * 2.2 + spread).round() as i32;
-        let pad_y_top = (blur_radius * 1.6 + spread - offset_y * 0.4).max(blur_radius * 0.6).round() as i32;
-        let pad_y_bottom = (blur_radius * 2.5 + spread + offset_y).round() as i32;
+        let pad_x = (blur_radius * 2.5).round() as i32;
+        let pad_y_top = (blur_radius * 1.8).round() as i32;
+        let pad_y_bottom = (blur_radius * 2.8 + offset_y).round() as i32;
 
         let quad_x = win_rect.loc.x - pad_x;
         let quad_y = win_rect.loc.y - pad_y_top;
