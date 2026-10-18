@@ -3,7 +3,7 @@ use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, CssProvider,
     DrawingArea, Entry, FileChooserAction, FileChooserNative, FileFilter, FlowBox, GestureClick,
-    GestureDrag, Label, Orientation, PackType, Picture, PolicyType, Scale, ScrolledWindow,
+    GestureDrag, Grid, Label, Orientation, PackType, Picture, PolicyType, Scale, ScrolledWindow,
     SearchEntry, Stack, StackTransitionType, Switch, WindowControls, WindowHandle,
 };
 use malus_de_common::config::{DisplaysConfig, DockConfig, InputConfig};
@@ -421,6 +421,25 @@ fn load_macos_settings_css() {
             border: 2px solid @accent_bg_color;
             color: @card_fg_color;
             box-shadow: 0 0 10px alpha(@accent_bg_color, 0.30);
+        }
+
+        .theme-select-btn {
+            background-color: alpha(currentColor, 0.05);
+            border: 1.5px solid @borders;
+            border-radius: 12px;
+            padding: 8px 12px;
+            color: @card_fg_color;
+            transition: all 150ms ease-in-out;
+        }
+        .theme-select-btn:hover {
+            background-color: alpha(currentColor, 0.10);
+            border-color: alpha(currentColor, 0.20);
+        }
+        .theme-select-btn-active {
+            background-color: alpha(@accent_bg_color, 0.18);
+            border: 2px solid @accent_bg_color;
+            color: @card_fg_color;
+            box-shadow: 0 0 10px alpha(@accent_bg_color, 0.25);
         }
 
         scrolledwindow,
@@ -2376,6 +2395,265 @@ fn is_dark_mode_active() -> bool {
     false
 }
 
+fn get_installed_gtk_themes() -> Vec<(String, String, &'static str)> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let dirs = [
+        format!("{}/.themes", home),
+        format!("{}/.local/share/themes", home),
+        "/usr/share/themes".to_string(),
+    ];
+
+    let mut found_names = std::collections::HashSet::new();
+    let mut themes = Vec::new();
+
+    // Soportar siempre el tema nativo Adwaita de GNOME / Libadwaita
+    themes.push((
+        "Adwaita".to_string(),
+        "🐧 Adwaita (Nativo)".to_string(),
+        "Tema estándar y limpio del sistema GNOME / Libadwaita",
+    ));
+    found_names.insert("Adwaita".to_string());
+
+    for dir in &dirs {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let has_gtk3 = path.join("gtk-3.0").exists();
+                    let has_gtk4 = path.join("gtk-4.0").exists();
+                    if has_gtk3 || has_gtk4 {
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if !name.ends_with("-hdpi") && !name.ends_with("-xhdpi") && found_names.insert(name.to_string()) {
+                                let (label, desc) = match name {
+                                    "WhiteSur-Dark" => ("🍎 WhiteSur Oscuro", "Estilo macOS Sonoma oscuro con controles y botones redondeados"),
+                                    "WhiteSur-Light" => ("🍎 WhiteSur Claro", "Estilo macOS Sonoma claro con controles y botones redondeados"),
+                                    "WhiteSur-Dark-solid" => ("🍎 WhiteSur Oscuro Sólido", "Variante oscura con fondos sólidos sin efecto de translucidez"),
+                                    "WhiteSur-Light-solid" => ("🍎 WhiteSur Claro Sólido", "Variante clara con fondos sólidos sin efecto de translucidez"),
+                                    other => (other, "Tema de controles GTK instalado"),
+                                };
+                                themes.push((name.to_string(), label.to_string(), desc));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Ordenar para priorizar variantes WhiteSur y Adwaita
+    themes.sort_by(|a, b| {
+        let order_score = |id: &str| match id {
+            "WhiteSur-Dark" => 1,
+            "WhiteSur-Light" => 2,
+            "WhiteSur-Dark-solid" => 3,
+            "WhiteSur-Light-solid" => 4,
+            "Adwaita" => 5,
+            _ => 10,
+        };
+        order_score(&a.0).cmp(&order_score(&b.0)).then_with(|| a.0.cmp(&b.0))
+    });
+
+    themes
+}
+
+fn get_current_gtk_theme() -> String {
+    Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.interface", "gtk-theme"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().trim_matches('\'').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Adwaita".to_string())
+}
+
+fn set_gtk_theme(theme_name: &str) {
+    tracing::info!("🎨 Aplicando tema GTK y controles: {}", theme_name);
+
+    // 1. gsettings
+    let _ = Command::new("gsettings")
+        .args(["set", "org.gnome.desktop.interface", "gtk-theme", theme_name])
+        .status();
+
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+
+    // 2. keyfile aislado de Malus DE
+    let keyfile_path = PathBuf::from(&home).join(".config/malus-de/glib-2.0/settings/keyfile");
+    if keyfile_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&keyfile_path) {
+            let mut new_lines = Vec::new();
+            let mut found = false;
+            for line in content.lines() {
+                if line.starts_with("gtk-theme=") {
+                    new_lines.push(format!("gtk-theme='{}'", theme_name));
+                    found = true;
+                } else {
+                    new_lines.push(line.to_string());
+                }
+            }
+            if !found {
+                new_lines.push(format!("gtk-theme='{}'", theme_name));
+            }
+            let _ = std::fs::write(&keyfile_path, new_lines.join("\n") + "\n");
+        }
+    }
+
+    // 3. settings.ini para GTK3 y GTK4
+    let ini_paths = [
+        format!("{}/.config/malus-de/gtk-3.0/settings.ini", home),
+        format!("{}/.config/malus-de/gtk-4.0/settings.ini", home),
+        format!("{}/.config/gtk-3.0/settings.ini", home),
+        format!("{}/.config/gtk-4.0/settings.ini", home),
+    ];
+    for path_str in &ini_paths {
+        let path = PathBuf::from(path_str);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                let mut lines: Vec<String> = Vec::new();
+                let mut found = false;
+                for line in content.lines() {
+                    if line.starts_with("gtk-theme-name=") {
+                        lines.push(format!("gtk-theme-name={}", theme_name));
+                        found = true;
+                    } else {
+                        lines.push(line.to_string());
+                    }
+                }
+                if !found {
+                    lines.push(format!("gtk-theme-name={}", theme_name));
+                }
+                let _ = std::fs::write(&path, lines.join("\n") + "\n");
+            }
+        } else {
+            let dark_num = if is_dark_mode_active() { "1" } else { "0" };
+            let (cursor_theme, cursor_sz) = get_current_cursor_config();
+            let content = format!(
+                "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme={}\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-theme-name={}\n",
+                dark_num, cursor_theme, cursor_sz, theme_name
+            );
+            let _ = std::fs::write(&path, content);
+        }
+    }
+
+    // 4. GTK4 / Libadwaita theme linking y theme.css
+    let gtk_css_paths = [
+        format!("{}/.config/gtk-4.0/gtk.css", home),
+        format!("{}/.config/malus-de/gtk-4.0/gtk.css", home),
+    ];
+    for gcss_str in &gtk_css_paths {
+        let gcss_path = PathBuf::from(gcss_str);
+        if gcss_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&gcss_path) {
+                if !content.contains("@import url(\"theme.css\");") {
+                    let updated = format!("@import url(\"theme.css\");\n{}", content);
+                    let _ = std::fs::write(&gcss_path, updated);
+                }
+            }
+        }
+    }
+
+    let theme_dirs = [
+        format!("{}/.themes/{}", home, theme_name),
+        format!("{}/.local/share/themes/{}", home, theme_name),
+        format!("/usr/share/themes/{}", theme_name),
+    ];
+
+    let mut gtk4_css_file: Option<PathBuf> = None;
+    let mut theme_gtk4_dir: Option<PathBuf> = None;
+
+    if theme_name != "Adwaita" {
+        for tdir_str in &theme_dirs {
+            let tdir = PathBuf::from(tdir_str);
+            let candidate_css = tdir.join("gtk-4.0/gtk.css");
+            if candidate_css.exists() {
+                gtk4_css_file = Some(candidate_css);
+                theme_gtk4_dir = Some(tdir.join("gtk-4.0"));
+                break;
+            }
+        }
+    }
+
+    let theme_css_paths = [
+        format!("{}/.config/gtk-4.0/theme.css", home),
+        format!("{}/.config/malus-de/gtk-4.0/theme.css", home),
+    ];
+
+    let gtk4_folders = [
+        format!("{}/.config/gtk-4.0", home),
+        format!("{}/.config/malus-de/gtk-4.0", home),
+    ];
+
+    if let (Some(css_file), Some(gtk4_dir)) = (gtk4_css_file, theme_gtk4_dir) {
+        let import_line = format!("@import url(\"{}\");\n", css_file.to_string_lossy());
+        for tpath_str in &theme_css_paths {
+            let _ = std::fs::write(tpath_str, &import_line);
+        }
+
+        // Crear enlaces simbólicos para assets y windows-assets si existen
+        for folder_str in &gtk4_folders {
+            let folder = PathBuf::from(folder_str);
+            let assets_src = gtk4_dir.join("assets");
+            let assets_dst = folder.join("assets");
+            if assets_dst.is_symlink() || assets_dst.exists() {
+                let _ = std::fs::remove_file(&assets_dst);
+            }
+            if assets_src.exists() {
+                let _ = std::os::unix::fs::symlink(&assets_src, &assets_dst);
+            }
+
+            let win_assets_src = gtk4_dir.join("windows-assets");
+            let win_assets_dst = folder.join("windows-assets");
+            if win_assets_dst.is_symlink() || win_assets_dst.exists() {
+                let _ = std::fs::remove_file(&win_assets_dst);
+            }
+            if win_assets_src.exists() {
+                let _ = std::os::unix::fs::symlink(&win_assets_src, &win_assets_dst);
+            }
+        }
+    } else {
+        // Modo Adwaita nativo: limpiar theme.css y enlaces simbólicos de assets
+        for tpath_str in &theme_css_paths {
+            let _ = std::fs::write(tpath_str, "/* Native Adwaita / Libadwaita theme */\n");
+        }
+        for folder_str in &gtk4_folders {
+            let folder = PathBuf::from(folder_str);
+            let assets_dst = folder.join("assets");
+            if assets_dst.is_symlink() {
+                let _ = std::fs::remove_file(&assets_dst);
+            }
+            let win_assets_dst = folder.join("windows-assets");
+            if win_assets_dst.is_symlink() {
+                let _ = std::fs::remove_file(&win_assets_dst);
+            }
+        }
+    }
+
+    // 5. Notificar recarga en caliente de CSS en GTK4 tocando los archivos
+    for gcss_str in &gtk_css_paths {
+        let _ = Command::new("touch").arg(gcss_str).status();
+    }
+
+    // 6. Armonizar modo claro / oscuro si el nombre del tema lo especifica
+    let is_dark = if theme_name.contains("Dark") || theme_name.contains("dark") {
+        set_system_appearance_mode(true);
+        true
+    } else if theme_name.contains("Light") || theme_name.contains("light") {
+        set_system_appearance_mode(false);
+        false
+    } else {
+        is_dark_mode_active()
+    };
+
+    // 7. Notificar a componentes del entorno Malus DE
+    let _ = IpcClient::send_command(IpcMessage::ThemeChanged {
+        theme_name: theme_name.to_string(),
+        is_dark,
+    });
+}
+
 fn set_system_appearance_mode(to_dark: bool) {
     let target = if to_dark { "prefer-dark" } else { "prefer-light" };
     tracing::info!("🎨 Cambiando modo de apariencia del sistema: {}", target);
@@ -2437,8 +2715,9 @@ fn set_system_appearance_mode(to_dark: bool) {
         }
     );
 
+    let cur_theme = get_current_gtk_theme();
     let _ = IpcClient::send_command(IpcMessage::ThemeChanged {
-        theme_name: "macOS".to_string(),
+        theme_name: cur_theme,
         is_dark: to_dark,
     });
 }
@@ -2457,8 +2736,9 @@ fn set_cursor_theme_and_size(theme: &str, size: u32) {
     let _ = std::fs::write(default_theme_path, content);
 
     let dark_num = if is_dark_mode_active() { "1" } else { "0" };
+    let cur_gtk_theme = get_current_gtk_theme();
 
-    // Actualizar settings.ini en malus-de y general
+    // Actualizar settings.ini en malus-de y general preservando el tema GTK
     for ini_path in [
         format!("{}/.config/malus-de/gtk-3.0/settings.ini", home),
         format!("{}/.config/malus-de/gtk-4.0/settings.ini", home),
@@ -2470,10 +2750,27 @@ fn set_cursor_theme_and_size(theme: &str, size: u32) {
             let _ = std::fs::create_dir_all(parent);
         }
         let body = format!(
-            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme={}\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-theme-name=Adwaita\n",
-            dark_num, theme, size
+            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme={}\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-theme-name={}\n",
+            dark_num, theme, size, cur_gtk_theme
         );
         let _ = std::fs::write(p, body);
+    }
+
+    let keyfile_path = PathBuf::from(&home).join(".config/malus-de/glib-2.0/settings/keyfile");
+    if keyfile_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&keyfile_path) {
+            let mut new_lines = Vec::new();
+            for line in content.lines() {
+                if line.starts_with("cursor-theme=") {
+                    new_lines.push(format!("cursor-theme='{}'", theme));
+                } else if line.starts_with("cursor-size=") {
+                    new_lines.push(format!("cursor-size={}", size));
+                } else {
+                    new_lines.push(line.to_string());
+                }
+            }
+            let _ = std::fs::write(&keyfile_path, new_lines.join("\n") + "\n");
+        }
     }
 
     let _ = Command::new("dbus-update-activation-environment")
@@ -2499,7 +2796,7 @@ fn create_appearance_pane(
         .build();
 
     let title = Label::builder()
-        .label("Apariencia y Dock")
+        .label("Aspecto")
         .css_classes(["pane-header-title"])
         .xalign(0.0)
         .build();
@@ -2520,13 +2817,13 @@ fn create_appearance_pane(
         .build();
 
     let app_title = Label::builder()
-        .label("🎨 Modo de Apariencia del Sistema")
+        .label("🌓 Modo de Apariencia del Sistema")
         .css_classes(["card-section-title"])
         .xalign(0.0)
         .build();
 
     let app_desc = Label::builder()
-        .label("Selecciona el aspecto visual general para las aplicaciones y ventanas del sistema. La barra superior mantiene su diseño base transparente con texto blanco.")
+        .label("Selecciona el aspecto visual general (claro u oscuro) para las aplicaciones y ventanas del sistema. La barra superior mantiene su diseño base transparente con texto blanco.")
         .css_classes(["card-section-sub"])
         .wrap(true)
         .xalign(0.0)
@@ -2590,42 +2887,128 @@ fn create_appearance_pane(
 
     pane.append(&appearance_card);
 
-    let btn_l_c = btn_light.clone();
-    let btn_d_c = btn_dark.clone();
-    btn_light.connect_clicked(move |_| {
-        set_system_appearance_mode(false);
-        btn_l_c.add_css_class("appearance-mode-btn-active");
-        btn_d_c.remove_css_class("appearance-mode-btn-active");
-    });
+    // ------------------------------------------------------------------------
+    // SECCIÓN 2: Temas de Aplicaciones y Ventanas (GTK / Libadwaita)
+    // ------------------------------------------------------------------------
+    let theme_card = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .css_classes(["macos-group-card"])
+        .spacing(14)
+        .build();
 
-    let btn_l_c2 = btn_light.clone();
-    let btn_d_c2 = btn_dark.clone();
-    btn_dark.connect_clicked(move |_| {
-        set_system_appearance_mode(true);
-        btn_d_c2.add_css_class("appearance-mode-btn-active");
-        btn_l_c2.remove_css_class("appearance-mode-btn-active");
-    });
+    let theme_header = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(3)
+        .build();
 
-    if is_dark_mode_active() {
-        btn_dark.add_css_class("appearance-mode-btn-active");
-    } else {
-        btn_light.add_css_class("appearance-mode-btn-active");
+    let theme_title = Label::builder()
+        .label("🎨 Tema de Aplicaciones y Ventanas (GTK)")
+        .css_classes(["card-section-title"])
+        .xalign(0.0)
+        .build();
+
+    let theme_desc = Label::builder()
+        .label("Selecciona el tema de controles, botones y estilo de ventanas para todas las aplicaciones GTK3, GTK4 y Libadwaita del entorno.")
+        .css_classes(["card-section-sub"])
+        .wrap(true)
+        .xalign(0.0)
+        .build();
+
+    theme_header.append(&theme_title);
+    theme_header.append(&theme_desc);
+    theme_card.append(&theme_header);
+
+    let gtk_themes_list = get_installed_gtk_themes();
+    let gtk_themes_grid = Grid::builder()
+        .column_spacing(10)
+        .row_spacing(10)
+        .column_homogeneous(true)
+        .build();
+
+    let gtk_theme_buttons: Rc<RefCell<Vec<(String, Button)>>> = Rc::new(RefCell::new(Vec::new()));
+
+    let gtk_status_hint_lbl = Label::builder()
+        .label("✓ Tema aplicado en vivo para todas las aplicaciones.")
+        .css_classes(["card-section-sub"])
+        .xalign(0.0)
+        .build();
+
+    let total_themes = gtk_themes_list.len();
+    for (idx, (theme_id, label_txt, desc_txt)) in gtk_themes_list.iter().enumerate() {
+        let btn = Button::builder()
+            .css_classes(["theme-select-btn"])
+            .has_frame(false)
+            .build();
+
+        let inner_box = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(12)
+            .margin_top(6)
+            .margin_bottom(6)
+            .margin_start(10)
+            .margin_end(10)
+            .build();
+
+        let icon_badge = Label::builder()
+            .label(if theme_id.starts_with("WhiteSur") { "🍎" } else if theme_id == "Adwaita" { "🐧" } else { "🎨" })
+            .css_classes([
+                "spotlight-banner-icon",
+                if theme_id.contains("Dark") {
+                    "badge-dark"
+                } else if theme_id.contains("Light") {
+                    "badge-blue"
+                } else if theme_id == "Adwaita" {
+                    "badge-teal"
+                } else {
+                    "badge-indigo"
+                },
+            ])
+            .valign(Align::Center)
+            .build();
+
+        let text_col = GtkBox::builder()
+            .orientation(Orientation::Vertical)
+            .spacing(2)
+            .hexpand(true)
+            .build();
+
+        let t_lbl = Label::builder()
+            .label(label_txt)
+            .css_classes(["card-section-title"])
+            .xalign(0.0)
+            .build();
+
+        let d_lbl = Label::builder()
+            .label(*desc_txt)
+            .css_classes(["card-section-sub"])
+            .xalign(0.0)
+            .wrap(true)
+            .build();
+
+        text_col.append(&t_lbl);
+        text_col.append(&d_lbl);
+
+        inner_box.append(&icon_badge);
+        inner_box.append(&text_col);
+        btn.set_child(Some(&inner_box));
+
+        let col = (idx % 2) as i32;
+        let row = (idx / 2) as i32;
+        if idx == total_themes - 1 && idx % 2 == 0 {
+            gtk_themes_grid.attach(&btn, 0, row, 2, 1);
+        } else {
+            gtk_themes_grid.attach(&btn, col, row, 1, 1);
+        }
+
+        gtk_theme_buttons.borrow_mut().push((theme_id.clone(), btn));
     }
 
-    let btn_l_notify = btn_light.clone();
-    let btn_d_notify = btn_dark.clone();
-    libadwaita::StyleManager::default().connect_dark_notify(move |sm| {
-        if sm.is_dark() {
-            btn_d_notify.add_css_class("appearance-mode-btn-active");
-            btn_l_notify.remove_css_class("appearance-mode-btn-active");
-        } else {
-            btn_l_notify.add_css_class("appearance-mode-btn-active");
-            btn_d_notify.remove_css_class("appearance-mode-btn-active");
-        }
-    });
+    theme_card.append(&gtk_themes_grid);
+    theme_card.append(&gtk_status_hint_lbl);
+    pane.append(&theme_card);
 
     // ------------------------------------------------------------------------
-    // SECCIÓN 2: Tema y Estilo del Cursor del Ratón (Puntero macOS)
+    // SECCIÓN 3: Tema y Estilo del Cursor del Ratón (Puntero macOS)
     // ------------------------------------------------------------------------
     let cursor_card = GtkBox::builder()
         .orientation(Orientation::Vertical)
@@ -2670,7 +3053,7 @@ fn create_appearance_pane(
     let state_theme = Rc::new(RefCell::new(active_theme));
     let state_size = Rc::new(RefCell::new(active_size));
 
-    let status_hint_lbl = Label::builder()
+    let cursor_status_hint_lbl = Label::builder()
         .label("✓ Tema aplicado en vivo para nuevas ventanas y aplicaciones.")
         .css_classes(["card-section-sub"])
         .xalign(0.0)
@@ -2746,12 +3129,12 @@ fn create_appearance_pane(
     }
     size_box.append(&size_pills_box);
     cursor_card.append(&size_box);
-    cursor_card.append(&status_hint_lbl);
+    cursor_card.append(&cursor_status_hint_lbl);
 
     pane.append(&cursor_card);
 
     // ------------------------------------------------------------------------
-    // SECCIÓN 2: Opciones del Dock
+    // SECCIÓN 4: Opciones del Dock
     // ------------------------------------------------------------------------
     let dock_card = GtkBox::builder()
         .orientation(Orientation::Vertical)
@@ -2792,7 +3175,7 @@ fn create_appearance_pane(
     pane.append(&dock_card);
 
     // ------------------------------------------------------------------------
-    // SECCIÓN 3: Fondo de Pantalla (Enlace a la sección dedicada)
+    // SECCIÓN 5: Fondo de Pantalla (Enlace a la sección dedicada)
     // ------------------------------------------------------------------------
     let wp_card = GtkBox::builder()
         .orientation(Orientation::Vertical)
@@ -2834,15 +3217,41 @@ fn create_appearance_pane(
     scrolled.set_child(Some(&pane));
 
     // Función para refrescar la selección visual activa de temas y tamaños
+    let gtk_tb_ref = gtk_theme_buttons.clone();
     let tb_ref = theme_buttons.clone();
     let sb_ref = size_buttons.clone();
     let st_theme = state_theme.clone();
     let st_size = state_size.clone();
+    let btn_l_ref = btn_light.clone();
+    let btn_d_ref = btn_dark.clone();
 
     let refresh_appearance: Rc<dyn Fn()> = Rc::new(move || {
-        let current_t = st_theme.borrow().clone();
-        let current_s = *st_size.borrow();
+        let current_gtk = get_current_gtk_theme();
+        let (current_t, current_s) = get_current_cursor_config();
+        *st_theme.borrow_mut() = current_t.clone();
+        *st_size.borrow_mut() = current_s;
 
+        // Modo Claro / Oscuro
+        if is_dark_mode_active() {
+            btn_d_ref.add_css_class("appearance-mode-btn-active");
+            btn_l_ref.remove_css_class("appearance-mode-btn-active");
+        } else {
+            btn_l_ref.add_css_class("appearance-mode-btn-active");
+            btn_d_ref.remove_css_class("appearance-mode-btn-active");
+        }
+
+        // Temas GTK
+        for (id, btn) in gtk_tb_ref.borrow().iter() {
+            if id == &current_gtk {
+                btn.add_css_class("theme-select-btn-active");
+                btn.remove_css_class("theme-select-btn");
+            } else {
+                btn.remove_css_class("theme-select-btn-active");
+                btn.add_css_class("theme-select-btn");
+            }
+        }
+
+        // Temas de cursor
         for (id, btn) in tb_ref.borrow().iter() {
             if id == &current_t {
                 btn.add_css_class("cursor-theme-btn-active");
@@ -2853,6 +3262,7 @@ fn create_appearance_pane(
             }
         }
 
+        // Tamaños de cursor
         for (sz, btn) in sb_ref.borrow().iter() {
             if *sz == current_s {
                 btn.add_css_class("macos-action-btn-primary");
@@ -2866,30 +3276,71 @@ fn create_appearance_pane(
 
     refresh_appearance();
 
-    // Conectar eventos de clic de los botones de tema
+    // Conectar eventos del modo de apariencia
+    let ref_app_1 = refresh_appearance.clone();
+    btn_light.connect_clicked(move |_| {
+        let cur = get_current_gtk_theme();
+        if cur == "WhiteSur-Dark" {
+            set_gtk_theme("WhiteSur-Light");
+        } else if cur == "WhiteSur-Dark-solid" {
+            set_gtk_theme("WhiteSur-Light-solid");
+        } else {
+            set_system_appearance_mode(false);
+        }
+        ref_app_1();
+    });
+
+    let ref_app_2 = refresh_appearance.clone();
+    btn_dark.connect_clicked(move |_| {
+        let cur = get_current_gtk_theme();
+        if cur == "WhiteSur-Light" {
+            set_gtk_theme("WhiteSur-Dark");
+        } else if cur == "WhiteSur-Light-solid" {
+            set_gtk_theme("WhiteSur-Dark-solid");
+        } else {
+            set_system_appearance_mode(true);
+        }
+        ref_app_2();
+    });
+
+    let ref_app_notify = refresh_appearance.clone();
+    libadwaita::StyleManager::default().connect_dark_notify(move |_| {
+        ref_app_notify();
+    });
+
+    // Conectar eventos de clic de los botones de tema GTK
+    for (t_id, btn) in gtk_theme_buttons.borrow().iter() {
+        let target_theme = t_id.clone();
+        let ref_fn = refresh_appearance.clone();
+        let hint_lbl_c = gtk_status_hint_lbl.clone();
+
+        btn.connect_clicked(move |_| {
+            set_gtk_theme(&target_theme);
+            hint_lbl_c.set_label(&format!("✓ Tema '{}' aplicado en vivo para todas las aplicaciones.", target_theme));
+            ref_fn();
+        });
+    }
+
+    // Conectar eventos de clic de los botones de tema de cursor
     for (t_id, btn) in theme_buttons.borrow().iter() {
         let target_theme = t_id.clone();
-        let st_theme_c = state_theme.clone();
         let st_size_c = state_size.clone();
         let ref_fn = refresh_appearance.clone();
 
         btn.connect_clicked(move |_| {
-            *st_theme_c.borrow_mut() = target_theme.clone();
             let sz = *st_size_c.borrow();
             set_cursor_theme_and_size(&target_theme, sz);
             ref_fn();
         });
     }
 
-    // Conectar eventos de clic de los botones de tamaño
+    // Conectar eventos de clic de los botones de tamaño de cursor
     for (sz, btn) in size_buttons.borrow().iter() {
         let target_size = *sz;
         let st_theme_c = state_theme.clone();
-        let st_size_c = state_size.clone();
         let ref_fn = refresh_appearance.clone();
 
         btn.connect_clicked(move |_| {
-            *st_size_c.borrow_mut() = target_size;
             let current_t = st_theme_c.borrow().clone();
             set_cursor_theme_and_size(&current_t, target_size);
             ref_fn();
