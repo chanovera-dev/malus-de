@@ -6,15 +6,16 @@ out vec4 frag_color;
 
 uniform sampler2D u_screen_texture; // Textura completa del framebuffer de salida
 uniform vec2 u_resolution;          // Resolución física del monitor
-uniform float u_screen_radius;      // Radio de curvatura físico (ej. 16.0 a 20.0 px)
+uniform float u_screen_radius;      // Radio de curvatura físico (ej. 24.0 px)
 
-// Máscara analítica para recortar las 4 esquinas de pantalla estilo display moderno
+// Máscara analítica para recortar las 4 esquinas de pantalla estilo squircle superelíptico (n=4.2)
 float screen_corner_mask(vec2 p, vec2 half_res, float r) {
     vec2 d = abs(p) - half_res + vec2(r);
     if (d.x <= 0.0 || d.y <= 0.0) {
         return 1.0;
     }
-    float dist = length(max(d, 0.0)) - r;
+    vec2 md = max(d, 0.0);
+    float dist = pow(pow(md.x, 4.2) + pow(md.y, 4.2), 1.0 / 4.2) - r;
     float aa = fwidth(dist);
     return 1.0 - smoothstep(-aa, 0.0, dist);
 }

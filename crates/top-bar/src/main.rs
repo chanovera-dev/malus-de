@@ -9,17 +9,25 @@ mod ui;
 pub mod services;
 
 const STYLE_CSS: &str = r#"
-window.malus-topbar {
-    background-color: rgba(24, 24, 27, 0.78);
-    color: #f4f4f5;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    font-size: 13px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+window.malus-topbar,
+window.malus-topbar.background,
+window.malus-topbar decoration {
+    background: transparent;
+    background-color: transparent;
+    color: #ffffff;
+    border: none;
+    outline: none;
+    box-shadow: none;
+    margin: 0;
+    padding: 0;
+    font-size: 13.5px;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     font-weight: 500;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
 }
 
 .topbar-content {
-    min-height: 32px;
+    min-height: 36px;
     padding-left: 10px;
     padding-right: 12px;
 }
@@ -50,7 +58,6 @@ menubutton > button arrow,
 menubutton > button image.arrow,
 menubutton > button > box > arrow,
 menubutton > button > box > image.arrow {
-    display: none;
     opacity: 0;
     -gtk-icon-size: 0;
     min-width: 0;
@@ -59,7 +66,7 @@ menubutton > button > box > image.arrow {
     margin: 0;
 }
 
-/* Botón interactivo único (limpio, sin recuadros superpuestos) */
+/* Botón interactivo único (limpio, sin recuadros superpuestos, estilo squircle) */
 button.topbar-btn,
 menubutton.topbar-btn > button,
 menubutton > button,
@@ -67,19 +74,21 @@ label.clock-label {
     background: transparent;
     background-color: transparent;
     border: none;
-    border-radius: 5px;
-    padding: 2px 7px;
-    color: #f4f4f5;
+    border-radius: 8px;
+    padding: 3px 9px;
+    color: #ffffff;
     box-shadow: none;
     outline: none;
     transition: background-color 100ms ease;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 button.topbar-btn:hover,
 menubutton.topbar-btn > button:hover,
 menubutton > button:hover,
 label.clock-label:hover {
-    background-color: rgba(255, 255, 255, 0.12);
+    background-color: rgba(255, 255, 255, 0.18);
+    border-radius: 8px;
     box-shadow: none;
 }
 
@@ -89,12 +98,17 @@ menubutton.topbar-btn > button:active,
 menubutton.topbar-btn > button:checked,
 menubutton > button:active,
 menubutton > button:checked {
-    background-color: rgba(255, 255, 255, 0.20);
+    background-color: rgba(255, 255, 255, 0.28);
+    border-radius: 8px;
     box-shadow: none;
 }
 
+.apple-logo-btn > button {
+    padding: 3px 8px;
+}
+
 .apple-icon {
-    font-size: 14px;
+    margin-top: -1px;
 }
 
 .active-app-name {
@@ -102,17 +116,20 @@ menubutton > button:checked {
     color: #ffffff;
     padding-left: 2px;
     padding-right: 4px;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.40);
 }
 
 .global-menu-item {
     font-weight: 500;
-    color: #e4e4e7;
+    color: #f4f4f5;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 .clock-label {
     font-variant-numeric: tabular-nums;
     font-weight: 600;
     color: #ffffff;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.40);
 }
 
 .active-pill {
@@ -122,7 +139,8 @@ menubutton > button:checked {
 
 /* Quitar fondo/borde del contenedor popover general para evitar recuadros superpuestos */
 popover.malus-popover-menu,
-popover.control-center-popover {
+popover.control-center-popover,
+popover.light-popover {
     background-color: transparent;
     background: transparent;
     border: none;
@@ -131,48 +149,287 @@ popover.control-center-popover {
 }
 
 popover.malus-popover-menu > arrow,
-popover.control-center-popover > arrow {
+popover.control-center-popover > arrow,
+popover.light-popover > arrow {
     background: transparent;
     border: none;
 }
 
-/* El recuadro visual único y pulido se aplica a contents */
+/* El recuadro visual único y pulido se aplica a contents (Curvatura Squircle continua macOS) */
 popover.malus-popover-menu > contents {
     background-color: rgba(28, 28, 34, 0.94);
     border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 10px;
+    border-radius: 14px;
     box-shadow: 0 14px 34px rgba(0, 0, 0, 0.60);
-    padding: 5px;
+    padding: 6px;
     color: #f4f4f5;
+    text-shadow: none;
 }
 
 popover.control-center-popover > contents {
     background-color: rgba(26, 26, 32, 0.95);
     border: 1px solid rgba(255, 255, 255, 0.16);
-    border-radius: 16px;
+    border-radius: 18px;
     box-shadow: 0 18px 44px rgba(0, 0, 0, 0.65);
     padding: 12px;
     color: #f4f4f5;
+    text-shadow: none;
 }
 
-.popover-menu-item {
+/* Soporte para Modo Claro en Popovers (Curvatura Squircle continua) */
+popover.light-popover.malus-popover-menu > contents,
+popover.light-popover > contents,
+.light-mode popover.malus-popover-menu > contents {
+    background-color: rgba(246, 246, 248, 0.96);
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: 14px;
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.20);
+    padding: 6px;
+    color: #1d1d1f;
+}
+
+popover.light-popover.control-center-popover > contents,
+.light-mode popover.control-center-popover > contents {
+    background-color: rgba(245, 245, 247, 0.96);
+    border: 1px solid rgba(0, 0, 0, 0.14);
+    border-radius: 18px;
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.22);
+    padding: 12px;
+    color: #1d1d1f;
+}
+
+popover.light-popover .popover-menu-item,
+popover.light-popover button.popover-menu-item,
+popover.light-popover button.flat,
+popover.light-popover modelbutton,
+.light-mode .popover-menu-item,
+.light-mode button.popover-menu-item,
+.light-mode button.flat,
+.light-mode modelbutton,
+popover.light-popover .menu-row-label,
+.light-mode .menu-row-label {
+    color: #1d1d1f;
+    border-radius: 8px;
+}
+
+popover.light-popover .popover-menu-item:hover,
+popover.light-popover button.popover-menu-item:hover,
+popover.light-popover button.flat:hover,
+popover.light-popover modelbutton:hover,
+.light-mode .popover-menu-item:hover,
+.light-mode button.popover-menu-item:hover,
+.light-mode button.flat:hover,
+.light-mode modelbutton:hover {
+    background-color: #007aff;
+    border-radius: 8px;
+    color: #ffffff;
+}
+
+popover.light-popover .popover-menu-item:hover .menu-row-label,
+popover.light-popover button.popover-menu-item:hover .menu-row-label,
+.light-mode .popover-menu-item:hover .menu-row-label {
+    color: #ffffff;
+}
+
+popover.light-popover .menu-shortcut-hint,
+.light-mode .menu-shortcut-hint {
+    color: rgba(0, 0, 0, 0.40);
+}
+
+popover.light-popover .popover-menu-item:hover .menu-shortcut-hint,
+.light-mode .popover-menu-item:hover .menu-shortcut-hint {
+    color: rgba(255, 255, 255, 0.90);
+}
+
+popover.light-popover .menu-separator,
+.light-mode .menu-separator {
+    background-color: rgba(0, 0, 0, 0.08);
+}
+
+popover.light-popover .cc-tile,
+.light-mode .cc-tile {
+    background-color: rgba(0, 0, 0, 0.05);
+    border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+popover.light-popover .cc-tile:hover,
+.light-mode .cc-tile:hover {
+    background-color: rgba(0, 0, 0, 0.08);
+}
+
+popover.light-popover .cc-tile-title,
+.light-mode .cc-tile-title {
+    color: #1d1d1f;
+}
+
+popover.light-popover .cc-tile-subtitle,
+.light-mode .cc-tile-subtitle {
+    color: rgba(0, 0, 0, 0.55);
+}
+
+popover.light-popover .cc-icon-circle,
+.light-mode .cc-icon-circle {
+    background-color: rgba(0, 0, 0, 0.08);
+    color: #1d1d1f;
+}
+
+popover.light-popover .cc-slider-card,
+.light-mode .cc-slider-card {
+    background-color: rgba(0, 0, 0, 0.05);
+    border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+popover.light-popover .cc-subview-title,
+.light-mode .cc-subview-title {
+    color: #1d1d1f;
+}
+
+popover.light-popover .cc-section-label,
+.light-mode .cc-section-label {
+    color: rgba(0, 0, 0, 0.55);
+}
+
+popover.light-popover .cc-list-row,
+.light-mode .cc-list-row {
+    background-color: rgba(0, 0, 0, 0.04);
+    border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+popover.light-popover .cc-list-row:hover,
+.light-mode .cc-list-row:hover {
+    background-color: rgba(0, 0, 0, 0.08);
+    border-color: rgba(0, 0, 0, 0.10);
+}
+
+popover.light-popover .cc-list-row-active,
+.light-mode .cc-list-row-active {
+    background-color: rgba(0, 122, 255, 0.15);
+    border: 1px solid rgba(0, 122, 255, 0.35);
+}
+
+popover.light-popover .cc-list-row-active:hover,
+.light-mode .cc-list-row-active:hover {
+    background-color: rgba(0, 122, 255, 0.22);
+}
+
+popover.light-popover .cc-item-title,
+.light-mode .cc-item-title {
+    color: #1d1d1f;
+}
+
+popover.light-popover .cc-item-subtitle,
+.light-mode .cc-item-subtitle {
+    color: rgba(0, 0, 0, 0.55);
+}
+
+popover.light-popover .cc-item-lock,
+.light-mode .cc-item-lock {
+    color: rgba(0, 0, 0, 0.40);
+}
+
+popover.light-popover .cc-footer-btn,
+.light-mode .cc-footer-btn {
+    color: #52525b;
+}
+
+popover.light-popover .cc-footer-btn:hover,
+.light-mode .cc-footer-btn:hover {
+    background-color: rgba(0, 0, 0, 0.06);
+    color: #1d1d1f;
+}
+
+popover.light-popover .cc-empty-label,
+.light-mode .cc-empty-label {
+    color: rgba(0, 0, 0, 0.45);
+}
+
+popover.light-popover .cc-airdrop-desc,
+.light-mode .cc-airdrop-desc {
+    color: rgba(0, 0, 0, 0.55);
+}
+
+popover.light-popover .cc-subview-back-btn,
+.light-mode .cc-subview-back-btn {
+    color: #1d1d1f;
+}
+
+popover.light-popover .cc-subview-back-btn:hover,
+.light-mode .cc-subview-back-btn:hover {
+    background-color: rgba(0, 0, 0, 0.06);
+}
+
+popover.light-popover .cc-switch-card,
+.light-mode .cc-switch-card {
+    background-color: rgba(0, 0, 0, 0.04);
+    border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+popover.light-popover .cc-refresh-btn,
+.light-mode .cc-refresh-btn {
+    color: #52525b;
+}
+
+popover.light-popover .cc-refresh-btn:hover,
+.light-mode .cc-refresh-btn:hover {
+    background-color: rgba(0, 0, 0, 0.06);
+    color: #1d1d1f;
+}
+
+.popover-menu-item,
+button.popover-menu-item,
+popover.malus-popover-menu button,
+popover.malus-popover-menu button.flat,
+popover modelbutton {
     background: transparent;
+    background-color: transparent;
     border: none;
-    border-radius: 6px;
-    padding: 4px 10px;
+    border-radius: 8px;
+    padding: 5px 10px;
+    margin: 1px 3px;
     color: #e4e4e7;
     font-size: 13px;
     font-weight: 500;
     transition: background-color 100ms ease;
+    box-shadow: none;
 }
 
-.popover-menu-item:hover {
+.popover-menu-item:hover,
+button.popover-menu-item:hover,
+popover.malus-popover-menu button:hover,
+popover.malus-popover-menu button.flat:hover,
+popover modelbutton:hover {
     background-color: #007aff;
+    border-radius: 8px;
     color: #ffffff;
+    box-shadow: none;
 }
 
-.popover-menu-item:hover .menu-shortcut-hint {
+.popover-menu-item:hover .menu-shortcut-hint,
+button.popover-menu-item:hover .menu-shortcut-hint {
     color: rgba(255, 255, 255, 0.85);
+}
+
+/* Enlaces y botones estilo Link con bordes squircle */
+link,
+link:hover,
+link:active,
+link:visited,
+button.link,
+button.link:hover,
+.link-btn {
+    color: #007aff;
+    text-decoration: none;
+    border-radius: 8px;
+    padding: 3px 6px;
+    transition: background-color 120ms ease, color 120ms ease;
+}
+
+link:hover,
+button.link:hover,
+.link-btn:hover {
+    background-color: rgba(0, 122, 255, 0.15);
+    border-radius: 8px;
+    color: #ffffff;
 }
 
 .menu-item-bold {
@@ -200,7 +457,7 @@ popover.control-center-popover > contents {
 .cc-tile {
     background-color: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 12px;
+    border-radius: 14px;
     padding: 8px 10px;
     transition: background-color 150ms ease;
 }
@@ -242,7 +499,7 @@ popover.control-center-popover > contents {
 .cc-slider-card {
     background-color: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 12px;
+    border-radius: 14px;
     padding: 10px 12px;
 }
 
@@ -251,7 +508,7 @@ popover.control-center-popover > contents {
     border: none;
     padding: 2px;
     color: #ffffff;
-    border-radius: 4px;
+    border-radius: 6px;
 }
 
 .cc-mute-btn:hover {
@@ -297,7 +554,7 @@ scale.horizontal slider {
 .cc-pill-btn {
     background-color: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 12px;
+    border-radius: 14px;
     padding: 4px 10px;
     font-size: 11px;
     font-weight: 600;
@@ -337,7 +594,7 @@ scale.horizontal slider {
     background: transparent;
     border: none;
     padding: 0 4px;
-    border-radius: 6px;
+    border-radius: 8px;
     transition: background-color 120ms ease;
 }
 
@@ -363,7 +620,7 @@ scale.horizontal slider {
     background: transparent;
     border: none;
     padding: 4px;
-    border-radius: 6px;
+    border-radius: 8px;
     color: #e4e4e7;
     transition: background-color 120ms ease;
 }
@@ -396,7 +653,7 @@ scale.horizontal slider {
     background: transparent;
     border: none;
     padding: 2px 4px;
-    border-radius: 4px;
+    border-radius: 6px;
     color: rgba(255, 255, 255, 0.60);
     transition: all 120ms ease;
 }
@@ -409,7 +666,7 @@ scale.horizontal slider {
 .cc-list-row {
     background-color: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.04);
-    border-radius: 8px;
+    border-radius: 10px;
     padding: 6px 8px;
     transition: all 120ms ease;
 }
@@ -453,8 +710,8 @@ scale.horizontal slider {
 .cc-footer-btn {
     background: transparent;
     border: none;
-    padding: 6px;
-    border-radius: 6px;
+    padding: 6px 10px;
+    border-radius: 8px;
     font-size: 11px;
     font-weight: 500;
     color: #a1a1aa;
@@ -484,7 +741,7 @@ scale.horizontal slider {
 .cc-airdrop-sim-btn {
     background-color: rgba(0, 122, 255, 0.15);
     border: 1px solid rgba(0, 122, 255, 0.35);
-    border-radius: 8px;
+    border-radius: 10px;
     padding: 6px 10px;
     font-size: 11px;
     font-weight: 600;
@@ -501,13 +758,13 @@ scale.horizontal slider {
 .cc-media-card {
     background-color: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 12px;
+    border-radius: 14px;
     padding: 8px 10px;
 }
 
 .cc-media-art {
     background-color: rgba(255, 255, 255, 0.12);
-    border-radius: 8px;
+    border-radius: 10px;
     min-width: 38px;
     min-height: 38px;
     color: #e4e4e7;
@@ -527,7 +784,7 @@ scale.horizontal slider {
 .cc-media-btn {
     background: transparent;
     border: none;
-    border-radius: 6px;
+    border-radius: 8px;
     padding: 4px;
     color: rgba(255, 255, 255, 0.75);
     transition: all 120ms ease;
@@ -555,6 +812,9 @@ fn main() {
     init_logging("malus_de_top_bar");
     info!("Iniciando Malus DE Top Bar (GTK4 / Layer Shell)...");
 
+    // Esperar de forma activa a que el compositor esté listo y aceptando conexiones
+    malus_de_common::wayland::wait_for_wayland(10);
+
     if let Err(err) = adw::init() {
         tracing::warn!("Aviso al inicializar libadwaita: {:?}", err);
     }
@@ -580,7 +840,7 @@ fn load_css() {
         gtk4::style_context_add_provider_for_display(
             &display,
             &provider,
-            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            gtk4::STYLE_PROVIDER_PRIORITY_USER,
         );
 
         let icon_theme = gtk4::IconTheme::for_display(&display);
@@ -598,12 +858,14 @@ fn build_ui(app: &Application) {
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Malus DE Top Bar")
-        .default_height(32)
+        .default_height(36)
         .css_classes(["malus-topbar"])
         .build();
 
-    window.set_size_request(-1, 32);
-    window.set_default_size(-1, 32);
+    window.set_size_request(-1, 36);
+    window.set_default_size(-1, 36);
+
+    window.set_decorated(false);
 
     if gtk4_layer_shell::is_supported() {
         info!("Protocolo Layer Shell soportado. Anclando Top Bar en capa Top...");
@@ -617,18 +879,19 @@ fn build_ui(app: &Application) {
         window.set_keyboard_mode(KeyboardMode::OnDemand);
     } else {
         info!("Layer Shell no detectado en este display; ejecutando ventana flotante.");
-        window.set_decorated(false);
     }
 
     let root_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .css_classes(["topbar-content"])
+        .valign(gtk4::Align::Center)
         .spacing(8)
         .build();
 
     // 1. Zona Izquierda: Apple Menu + Global Menu (con soporte com.canonical.AppMenu.Registrar)
     let left_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
+        .valign(gtk4::Align::Center)
         .spacing(4)
         .build();
 
@@ -674,12 +937,18 @@ fn build_ui(app: &Application) {
 
     glib::spawn_future_local(async move {
         while let Ok(msg) = rx.recv().await {
-            if let malus_de_common::ipc::IpcMessage::ActiveAppChanged { app_id, title, window_id } = msg {
-                let display = format_app_name(app_id.as_deref(), title.as_deref());
-                title_label.set_label(&display);
-                hide_btn.set_label(&format!("Ocultar {}          ⌘H", display));
-                quit_btn.set_label(&format!("Salir de {}        ⌘Q", display));
-                ui::global_menu::update_global_menu(&handles_clone, app_id.as_deref(), title.as_deref(), window_id);
+            match msg {
+                malus_de_common::ipc::IpcMessage::ActiveAppChanged { app_id, title, window_id } => {
+                    let display = format_app_name(app_id.as_deref(), title.as_deref());
+                    title_label.set_label(&display);
+                    hide_btn.set_label(&format!("Ocultar {}          ⌘H", display));
+                    quit_btn.set_label(&format!("Salir de {}        ⌘Q", display));
+                    ui::global_menu::update_global_menu(&handles_clone, app_id.as_deref(), title.as_deref(), window_id);
+                }
+                malus_de_common::ipc::IpcMessage::ThemeChanged { is_dark, .. } => {
+                    ui::theme::update_all_popovers_theme(is_dark);
+                }
+                _ => {}
             }
         }
     });
@@ -710,6 +979,7 @@ fn build_ui(app: &Application) {
     // 3. Zona Derecha: Auto-Tiling + Power Mode + Tray + Clock
     let right_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
+        .valign(gtk4::Align::Center)
         .spacing(6)
         .build();
     right_box.append(&ui::auto_tiling::create_auto_tiling_widget());

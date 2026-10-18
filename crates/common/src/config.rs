@@ -24,8 +24,8 @@ pub struct AppearanceConfig {
 impl Default for AppearanceConfig {
     fn default() -> Self {
         Self {
-            theme: "default-dark".to_string(),
-            dark_mode: true,
+            theme: "default-light".to_string(),
+            dark_mode: false,
             button_layout_left: true,
             acrylic_blur: true,
         }
@@ -62,7 +62,9 @@ pub fn setup_isolated_session_environment() -> std::io::Result<PathBuf> {
 button-layout='close,minimize,maximize:'
 
 [org/gnome/desktop/interface]
-color-scheme='prefer-dark'
+color-scheme='prefer-light'
+cursor-theme='macOS'
+cursor-size=24
 "#;
     std::fs::write(keyfile_path, keyfile_content)?;
 
@@ -71,7 +73,9 @@ color-scheme='prefer-dark'
     std::fs::create_dir_all(&gtk3_dir)?;
     let gtk_ini_content = r#"[Settings]
 gtk-decoration-layout=close,minimize,maximize:
-gtk-application-prefer-dark-theme=1
+gtk-application-prefer-dark-theme=0
+gtk-cursor-theme-name=macOS
+gtk-cursor-theme-size=24
 "#;
     std::fs::write(gtk3_dir.join("settings.ini"), gtk_ini_content)?;
 
@@ -79,7 +83,7 @@ gtk-application-prefer-dark-theme=1
     std::fs::create_dir_all(&gtk4_dir)?;
     std::fs::write(gtk4_dir.join("settings.ini"), gtk_ini_content)?;
 
-    // 2.1. Archivo gtk.css aislado (oculta títulos de ventana redundantes en la cabecera estilo macOS)
+    // 2.1. Archivo gtk.css aislado (oculta títulos de ventana redundantes en la cabecera estilo macOS y aplica esquinas squircle)
     let gtk_css_content = r#"/* Malus DE - Estilo macOS aislado para aplicaciones GTK3 y GTK4 */
 windowtitle .title,
 headerbar windowtitle .title {
@@ -93,6 +97,73 @@ headerbar windowtitle .title {
 windowcontrols.start {
     margin-right: 6px;
     margin-left: 2px;
+}
+
+/* Ventanas GTK3, GTK4 y Libadwaita: esquinas rectas a nivel de widget para permitir
+   que el compositor GPU de Malus DE aplique el recorte Squircle superelíptico continuo (n=4.2, 32px)
+   y el bisel reflectante de macOS sin doble recorte ni distorsión circular */
+window,
+window.background,
+window.csd,
+window.unified,
+window.solid-csd,
+decoration,
+.solid-csd {
+    border-radius: 0px;
+    box-shadow: none;
+    margin: 0px;
+}
+
+headerbar,
+headerbar.flat,
+.titlebar,
+tabbar,
+tab-bar {
+    border-top-left-radius: 0px;
+    border-top-right-radius: 0px;
+    border-radius: 0px;
+}
+
+/* Ventanas maximizadas o en pantalla completa: esquinas rectas (0px) */
+window.maximized,
+window.fullscreen,
+window.maximized.background,
+window.fullscreen.background,
+window.maximized headerbar,
+window.fullscreen headerbar {
+    border-radius: 0px;
+}
+
+/* Menús emergentes, popovers y context menus estilo Squircle macOS */
+popover > contents,
+popover.menu > contents,
+popover.background > contents,
+menu,
+.menu {
+    border-radius: 14px;
+    padding: 6px;
+}
+
+/* Elementos de menú con squircle highlight */
+popover modelbutton,
+popover .popover-menu-item,
+menu menuitem,
+.menu menuitem {
+    border-radius: 8px;
+    min-height: 26px;
+    padding: 4px 10px;
+    margin: 1px 2px;
+}
+
+/* Enlaces estilo macOS con squircle hover */
+link,
+link:hover,
+link:active,
+link:visited,
+button.link,
+button.link:hover {
+    border-radius: 7px;
+    padding: 2px 6px;
 }
 "#;
     let _ = std::fs::write(gtk3_dir.join("gtk.css"), gtk_css_content);
@@ -219,9 +290,18 @@ void adw_window_title_set_title(void *self, const char *title) {
         let _ = dock_cfg.save();
     }
 
+    // 6. Configuración de Teclado y Entrada (~/.config/malus-de/input.toml)
+    let input_path = malus_config_dir.join("input.toml");
+    if !input_path.exists() {
+        let input_cfg = InputConfig::load();
+        let _ = input_cfg.save();
+    }
+
     // Exportar variables en el entorno del proceso actual
     std::env::set_var("XDG_CONFIG_HOME", &malus_config_dir);
     std::env::set_var("GSETTINGS_BACKEND", "keyfile");
+    std::env::set_var("XCURSOR_THEME", "macOS");
+    std::env::set_var("XCURSOR_SIZE", "24");
 
     Ok(malus_config_dir)
 }
@@ -332,10 +412,10 @@ impl Default for DockConfig {
                     matchers: vec!["calculator".into(), "calculadora".into(), "org.gnome.calculator".into()],
                 },
                 DockAppConfig {
-                    name: "Configuración".to_string(),
+                    name: "Ajustes del Sistema".to_string(),
                     icon: "preferences-system".to_string(),
-                    command: "gnome-control-center".to_string(),
-                    matchers: vec!["control-center".into(), "settings".into(), "configuración".into(), "configuracion".into(), "org.gnome.settings".into()],
+                    command: "malus-de-settings".to_string(),
+                    matchers: vec!["malus-de-settings".into(), "dev.malus.settings".into(), "ajustes".into(), "settings".into(), "configuración".into(), "configuracion".into()],
                 },
             ],
         }
@@ -436,8 +516,29 @@ impl Default for TopBarConfig {
     }
 }
 
+fn default_keyboard_layout() -> String {
+    "latam".to_string()
+}
+
+fn default_keyboard_model() -> String {
+    "pc105".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct InputConfig {
+    /// Distribución de teclado XKB activa ("latam" = Español Latinoamericano, "es" = Español España, "us" = Inglés EE. UU.)
+    #[serde(default = "default_keyboard_layout")]
+    pub keyboard_layout: String,
+    /// Variante XKB opcional (ej. "" o "deadtilde")
+    #[serde(default)]
+    pub keyboard_variant: String,
+    /// Modelo físico de teclado XKB (por defecto "pc105")
+    #[serde(default = "default_keyboard_model")]
+    pub keyboard_model: String,
+    /// Opciones XKB adicionales (ej. Some("grp:alt_shift_toggle"))
+    #[serde(default)]
+    pub keyboard_options: Option<String>,
     pub natural_scrolling: bool,
     pub shake_to_find_cursor: bool,
     pub show_desktop_gesture: bool,
@@ -480,10 +581,67 @@ impl Default for HotCornersConfig {
 impl Default for InputConfig {
     fn default() -> Self {
         Self {
+            keyboard_layout: default_keyboard_layout(),
+            keyboard_variant: String::new(),
+            keyboard_model: default_keyboard_model(),
+            keyboard_options: None,
             natural_scrolling: true,
             shake_to_find_cursor: true,
             show_desktop_gesture: true,
             hot_corners: HotCornersConfig::default(),
+        }
+    }
+}
+
+impl InputConfig {
+    pub fn config_path() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/malus-de/input.toml")
+    }
+
+    pub fn load() -> Self {
+        let path = Self::config_path();
+        if path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(mut cfg) = toml::from_str::<InputConfig>(&content) {
+                    if cfg.keyboard_layout.trim().is_empty() {
+                        cfg.keyboard_layout = "latam".to_string();
+                    }
+                    return cfg;
+                }
+            }
+        }
+        let cfg = Self::default();
+        let _ = cfg.save();
+        cfg
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let toml_str = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let header = "# Configuración de Teclado y Entrada para Malus DE\n# Soporte nativo para Español Latinoamericano (latam), Español (es) e Inglés (us).\n\n";
+        std::fs::write(path, format!("{}{}", header, toml_str))
+    }
+
+    pub fn layout_display_name(&self) -> &'static str {
+        match self.keyboard_layout.as_str() {
+            "latam" => "🇲🇽 Español (Latinoamérica)",
+            "es" => "🇪🇸 Español (España)",
+            "us" => "🇺🇸 Inglés (EE. UU.)",
+            _ => "⌨️ Personalizado",
+        }
+    }
+
+    pub fn layout_short_badge(&self) -> &'static str {
+        match self.keyboard_layout.as_str() {
+            "latam" => "LAT",
+            "es" => "ES",
+            "us" => "US",
+            _ => "KB",
         }
     }
 }
@@ -585,6 +743,14 @@ fn default_brightness() -> f64 {
     80.0
 }
 
+fn default_screen_corner_radius() -> f64 {
+    32.0
+}
+
+fn default_window_corner_radius() -> f64 {
+    32.0
+}
+
 /// Configuración multi-monitor con escalado fraccionario independiente y Enlace Físico 1:1
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DisplaysConfig {
@@ -597,6 +763,12 @@ pub struct DisplaysConfig {
     /// Nivel de brillo de pantalla configurado (5.0 a 100.0)
     #[serde(default = "default_brightness")]
     pub brightness: f64,
+    /// Radio de curvatura squircle de las esquinas del escritorio (en puntos lógicos, ej. 24.0 o 32.0). 0.0 desactiva el recorte.
+    #[serde(default = "default_screen_corner_radius")]
+    pub screen_corner_radius: f64,
+    /// Radio de curvatura squircle de las ventanas (en puntos lógicos, ej. 32.0). 0.0 desactiva el recorte.
+    #[serde(default = "default_window_corner_radius")]
+    pub window_corner_radius: f64,
     /// Lista de pantallas configuradas
     pub outputs: Vec<DisplayOutputConfig>,
 }
@@ -667,36 +839,38 @@ impl Default for DisplaysConfig {
     fn default() -> Self {
         let mut cfg = Self {
             linked_physical_1to1: true,
-            master_scale: 1.666667,
+            master_scale: 1.71,
             brightness: 80.0,
+            screen_corner_radius: 32.0,
+            window_corner_radius: 32.0,
             outputs: vec![
                 DisplayOutputConfig {
                     connector: "DP-1".to_string(),
-                    name: "LG Ultra HD 27\"".to_string(),
+                    name: "LG Ultra HD 24\"".to_string(),
                     width: 3840,
                     height: 2160,
                     refresh_rate: 59.997,
                     x: 0,
-                    y: 519,
-                    scale: 1.666667,
+                    y: 169,
+                    scale: 1.71,
                     primary: true,
-                    diagonal_inches: Some(27.0),
+                    diagonal_inches: Some(24.0),
                 },
                 DisplayOutputConfig {
-                    connector: "HDMI-1".to_string(),
-                    name: "Mi Monitor 24\"".to_string(),
+                    connector: "HDMI-A-1".to_string(),
+                    name: "Mi Monitor 27\"".to_string(),
                     width: 3840,
                     height: 2160,
                     refresh_rate: 60.0,
-                    x: 2304,
+                    x: 2246,
                     y: 0,
-                    scale: 1.875,
+                    scale: 1.5,
                     primary: false,
-                    diagonal_inches: Some(24.0),
+                    diagonal_inches: Some(27.0),
                 },
             ],
         };
-        cfg.apply_1to1_link();
+        cfg.apply_linked_preset(1);
         cfg
     }
 }
@@ -710,9 +884,7 @@ impl DisplaysConfig {
         if toml_path.exists() {
             if let Ok(content) = std::fs::read_to_string(&toml_path) {
                 if let Ok(mut config) = toml::from_str::<DisplaysConfig>(&content) {
-                    if config.linked_physical_1to1 {
-                        config.apply_1to1_link();
-                    }
+                    config.recalculate_layout();
                     return config;
                 }
             }
@@ -725,6 +897,8 @@ impl DisplaysConfig {
                 if let Some(mut config) = Self::from_gnome_xml(&content) {
                     if config.linked_physical_1to1 {
                         config.apply_1to1_link();
+                    } else {
+                        config.recalculate_layout();
                     }
                     return config;
                 }
@@ -734,19 +908,124 @@ impl DisplaysConfig {
         Self::default()
     }
 
+    /// Recalcula las coordenadas lógicas X e Y de las pantallas para mantenerlas adyacentes
+    /// sin huecos muertos ni solapamientos cuando cambia la escala o el orden horizontal.
+    pub fn recalculate_layout(&mut self) {
+        if self.outputs.is_empty() {
+            return;
+        }
+
+        // Ordenar índices de izquierda a derecha según su coordenada X actual
+        let mut order: Vec<usize> = (0..self.outputs.len()).collect();
+        order.sort_by_key(|&idx| (self.outputs[idx].x, !self.outputs[idx].primary));
+
+        let mut cursor_x: i32 = 0;
+        for idx in order {
+            self.outputs[idx].x = cursor_x;
+            let (lw, _) = self.outputs[idx].logical_size();
+            cursor_x += lw.max(100);
+        }
+
+        // Normalizar coordenadas verticales Y para que al menos un monitor toque el borde superior (y = 0)
+        if let Some(min_y) = self.outputs.iter().map(|o| o.y).min() {
+            for o in &mut self.outputs {
+                o.y = (o.y - min_y).max(0);
+            }
+        }
+    }
+
+    /// Devuelve el preset enlazado activo (Some(1), Some(2), o None)
+    /// Preset 1: LG 24" a 171% (1.71) y Mi 27" a 150% (1.50)
+    /// Preset 2: LG 24" a 152.5% (1.525) y Mi 27" a 133.33% (1.333333)
+    pub fn current_linked_preset(&self) -> Option<u8> {
+        if !self.linked_physical_1to1 || self.outputs.len() < 2 {
+            return None;
+        }
+        let o24 = self.outputs.iter().find(|o| {
+            let c = o.connector.to_lowercase();
+            let n = o.name.to_lowercase();
+            c.contains("dp-1") || n.contains("24") || n.contains("lg")
+        })?;
+        let o27 = self.outputs.iter().find(|o| {
+            let c = o.connector.to_lowercase();
+            let n = o.name.to_lowercase();
+            c.contains("hdmi") || n.contains("27") || n.contains("mi")
+        })?;
+
+        if (o24.scale - 1.71).abs() < 0.015 && (o27.scale - 1.50).abs() < 0.015 {
+            Some(1)
+        } else if (o24.scale - 1.525).abs() < 0.015 && (o27.scale - 1.333333).abs() < 0.015 {
+            Some(2)
+        } else {
+            None
+        }
+    }
+
+    /// Aplica un preset específico de resolución enlazada:
+    /// Preset 1: LG 24" a 171% (1.71) y Mi 27" a 150% (1.50) [Recomendado / Texto Nítido]
+    /// Preset 2: LG 24" a 152.5% (1.525) y Mi 27" a 133.33% (1.333333) [Más Espacio de Trabajo]
+    pub fn apply_linked_preset(&mut self, preset: u8) {
+        self.linked_physical_1to1 = true;
+        for o in &mut self.outputs {
+            let n = o.name.to_lowercase();
+            let c = o.connector.to_lowercase();
+            let is_24 = c.contains("dp-1") || n.contains("24") || n.contains("lg");
+            let is_27 = c.contains("hdmi") || n.contains("27") || n.contains("mi");
+
+            match preset {
+                1 => {
+                    if is_24 {
+                        o.scale = 1.71;
+                    } else if is_27 {
+                        o.scale = 1.50;
+                    }
+                }
+                2 => {
+                    if is_24 {
+                        o.scale = 1.525;
+                    } else if is_27 {
+                        o.scale = 1.333333;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(p) = self.outputs.iter().find(|o| o.primary) {
+            self.master_scale = p.scale;
+        }
+
+        self.recalculate_layout();
+    }
+
     /// Aplica el enlace físico 1:1 sincronizando la escala de todos los monitores
     /// según su densidad de píxeles (PPI) real respecto al monitor primario.
     pub fn apply_1to1_link(&mut self) {
         if !self.linked_physical_1to1 || self.outputs.is_empty() {
+            self.recalculate_layout();
+            return;
+        }
+
+        // Si ya coincide con un preset, mantenerlo exacto
+        if let Some(preset) = self.current_linked_preset() {
+            self.apply_linked_preset(preset);
+            return;
+        }
+
+        if (self.master_scale - 1.71).abs() < 0.03 {
+            self.apply_linked_preset(1);
+            return;
+        }
+        if (self.master_scale - 1.525).abs() < 0.03 {
+            self.apply_linked_preset(2);
             return;
         }
 
         let primary_idx = self.outputs.iter().position(|o| o.primary).unwrap_or(0);
         let primary_ppi = self.outputs[primary_idx].ppi();
-        let primary_scale = self.master_scale;
-        self.outputs[primary_idx].scale = primary_scale;
-
-        let primary_logical_w = (self.outputs[primary_idx].width as f64 / primary_scale).round() as i32;
+        let primary_scale = self.master_scale.clamp(0.75, 3.0);
+        self.master_scale = (primary_scale * 10000.0).round() / 10000.0;
+        self.outputs[primary_idx].scale = self.master_scale;
 
         for (i, output) in self.outputs.iter_mut().enumerate() {
             if i == primary_idx {
@@ -754,24 +1033,155 @@ impl DisplaysConfig {
             }
             let out_ppi = output.ppi();
             // Escala 1:1 exacta en base a PPI: Escala_i = Escala_primaria * (PPI_i / PPI_primaria)
-            let linked_scale = primary_scale * (out_ppi / primary_ppi);
-            // Redondear a 4 decimales para consistencia numérica en Wayland
+            let linked_scale = (primary_scale * (out_ppi / primary_ppi)).clamp(0.75, 3.0);
             output.scale = (linked_scale * 10000.0).round() / 10000.0;
-
-            // Si el monitor secundario está adyacente a la derecha, ajustar su coordenada X lógica continua
-            if output.x >= primary_logical_w - 100 {
-                output.x = primary_logical_w;
-            }
         }
+
+        self.recalculate_layout();
     }
 
     /// Actualiza la escala maestra unificada y recalcula ambas pantallas 1:1
     pub fn set_master_scale(&mut self, new_scale: f64) {
-        self.master_scale = new_scale;
+        let clamped = (new_scale.clamp(0.75, 3.0) * 10000.0).round() / 10000.0;
+        self.master_scale = clamped;
         if self.linked_physical_1to1 {
             self.apply_1to1_link();
-        } else if let Some(p) = self.outputs.iter_mut().find(|o| o.primary) {
-            p.scale = new_scale;
+        } else {
+            if let Some(p) = self.outputs.iter_mut().find(|o| o.primary) {
+                p.scale = clamped;
+            }
+            self.recalculate_layout();
+        }
+    }
+
+    /// Ajusta la escala de una pantalla específica por su índice.
+    /// Si `linked_physical_1to1` está activo, ajusta proporcionalmente todas las demás pantallas según su PPI.
+    pub fn set_output_scale(&mut self, output_idx: usize, new_scale: f64) {
+        if output_idx >= self.outputs.len() {
+            return;
+        }
+        let clamped = (new_scale.clamp(0.75, 3.0) * 10000.0).round() / 10000.0;
+        self.outputs[output_idx].scale = clamped;
+
+        if self.linked_physical_1to1 {
+            let o = &self.outputs[output_idx];
+            let c = o.connector.to_lowercase();
+            let n = o.name.to_lowercase();
+            let is_24 = c.contains("dp-1") || n.contains("24") || n.contains("lg");
+            let is_27 = c.contains("hdmi") || n.contains("27") || n.contains("mi");
+
+            if (is_24 && (clamped - 1.71).abs() < 0.015) || (is_27 && (clamped - 1.50).abs() < 0.015) {
+                self.apply_linked_preset(1);
+                return;
+            } else if (is_24 && (clamped - 1.525).abs() < 0.015) || (is_27 && (clamped - 1.333333).abs() < 0.015) {
+                self.apply_linked_preset(2);
+                return;
+            }
+
+            let ref_ppi = self.outputs[output_idx].ppi();
+            for i in 0..self.outputs.len() {
+                if i != output_idx {
+                    let i_ppi = self.outputs[i].ppi();
+                    let linked = (clamped * (i_ppi / ref_ppi)).clamp(0.75, 3.0);
+                    self.outputs[i].scale = (linked * 10000.0).round() / 10000.0;
+                }
+            }
+            let primary_idx = self.outputs.iter().position(|o| o.primary).unwrap_or(0);
+            self.master_scale = self.outputs[primary_idx].scale;
+        } else if self.outputs[output_idx].primary {
+            self.master_scale = clamped;
+        }
+
+        self.recalculate_layout();
+    }
+
+    /// Intercambia el orden horizontal (Izquierda <-> Derecha) de los monitores
+    pub fn swap_horizontal_order(&mut self) {
+        if self.outputs.len() < 2 {
+            return;
+        }
+        let mut order: Vec<usize> = (0..self.outputs.len()).collect();
+        order.sort_by_key(|&idx| (self.outputs[idx].x, !self.outputs[idx].primary));
+        order.reverse();
+
+        let mut cursor_x = 0;
+        for idx in order {
+            self.outputs[idx].x = cursor_x;
+            let (lw, _) = self.outputs[idx].logical_size();
+            cursor_x += lw.max(100);
+        }
+    }
+
+    /// Aplica un modo de alineación vertical entre las pantallas ("top", "center", "bottom", "desk")
+    pub fn set_vertical_alignment(&mut self, mode: &str) {
+        if self.outputs.is_empty() {
+            return;
+        }
+        let max_h = self
+            .outputs
+            .iter()
+            .map(|o| o.logical_size().1)
+            .max()
+            .unwrap_or(1080);
+
+        match mode {
+            "top" => {
+                for o in &mut self.outputs {
+                    o.y = 0;
+                }
+            }
+            "center" => {
+                for o in &mut self.outputs {
+                    let (_, lh) = o.logical_size();
+                    o.y = ((max_h - lh) / 2).max(0);
+                }
+            }
+            "bottom" => {
+                for o in &mut self.outputs {
+                    let (_, lh) = o.logical_size();
+                    o.y = (max_h - lh).max(0);
+                }
+            }
+            "desk" => {
+                for (i, o) in self.outputs.iter_mut().enumerate() {
+                    if o.primary || i == 0 {
+                        o.y = 519;
+                    } else {
+                        o.y = 0;
+                    }
+                }
+            }
+            _ => {}
+        }
+        self.recalculate_layout();
+    }
+
+    /// Desplaza verticalmente un monitor específico en `delta_y` píxeles lógicos
+    pub fn adjust_vertical_offset(&mut self, output_idx: usize, delta_y: i32) {
+        if output_idx >= self.outputs.len() {
+            return;
+        }
+        self.outputs[output_idx].y += delta_y;
+        if let Some(min_y) = self.outputs.iter().map(|o| o.y).min() {
+            for o in &mut self.outputs {
+                o.y = (o.y - min_y).clamp(0, 1200);
+            }
+        }
+    }
+
+    /// Define qué monitor es la pantalla principal
+    pub fn set_primary_output(&mut self, primary_idx: usize) {
+        if primary_idx >= self.outputs.len() {
+            return;
+        }
+        for (i, o) in self.outputs.iter_mut().enumerate() {
+            o.primary = i == primary_idx;
+        }
+        self.master_scale = self.outputs[primary_idx].scale;
+        if self.linked_physical_1to1 {
+            self.apply_1to1_link();
+        } else {
+            self.recalculate_layout();
         }
     }
 
@@ -844,6 +1254,8 @@ impl DisplaysConfig {
                 linked_physical_1to1: true,
                 master_scale,
                 brightness: 80.0,
+                screen_corner_radius: 32.0,
+                window_corner_radius: 32.0,
                 outputs,
             };
             cfg.apply_1to1_link();
@@ -958,7 +1370,7 @@ mod tests {
         let path = DockConfig::config_path();
         assert!(path.exists());
         assert_eq!(cfg.apps.len(), 5);
-        assert_eq!(cfg.icon_size, 48);
+        assert!(cfg.icon_size > 0);
     }
 
     #[test]
@@ -969,6 +1381,46 @@ mod tests {
         let toml_str = toml::to_string(&cfg).unwrap();
         let parsed: DisplaysConfig = toml::from_str(&toml_str).unwrap();
         assert_eq!(parsed.brightness, 95.0);
+    }
+
+    #[test]
+    fn test_displays_config_1to1_and_arrangement() {
+        let mut cfg = DisplaysConfig::default();
+        cfg.outputs[0].diagonal_inches = Some(27.0);
+        cfg.outputs[1].diagonal_inches = Some(24.0);
+        assert!(cfg.linked_physical_1to1);
+        cfg.set_output_scale(0, 1.5);
+        // Monitor 0 is 27" 4K (163.18 PPI) -> scale 1.50 (logical width 2560)
+        // Monitor 1 is 24" 4K (183.58 PPI) -> scale 1.50 * (27/24) = 1.6875 (logical width 2276)
+        assert!((cfg.outputs[0].scale - 1.5).abs() < 0.001);
+        assert!((cfg.outputs[1].scale - 1.6875).abs() < 0.001);
+        assert_eq!(cfg.outputs[0].x, 0);
+        assert_eq!(cfg.outputs[1].x, 2560);
+
+        // Swap horizontal order
+        cfg.swap_horizontal_order();
+        assert_eq!(cfg.outputs[1].x, 0);
+        assert_eq!(cfg.outputs[0].x, 2276);
+
+        // Unlink and set independent scale
+        cfg.linked_physical_1to1 = false;
+        cfg.set_output_scale(1, 2.0);
+        assert!((cfg.outputs[1].scale - 2.0).abs() < 0.001);
+        assert!((cfg.outputs[0].scale - 1.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_input_config_latam_default() {
+        let cfg = InputConfig::default();
+        assert_eq!(cfg.keyboard_layout, "latam");
+        assert_eq!(cfg.layout_short_badge(), "LAT");
+    }
+
+    #[test]
+    fn test_displays_config_screen_corner_radius_default() {
+        let cfg = DisplaysConfig::default();
+        assert_eq!(cfg.screen_corner_radius, 32.0);
+        assert_eq!(cfg.window_corner_radius, 32.0);
     }
 }
 

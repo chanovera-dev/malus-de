@@ -1,0 +1,22 @@
+[package]
+name = "malus-de-settings"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Ajustes del Sistema de Malus DE (inspirado fielmente en macOS System Settings)"
+
+[[bin]]
+name = "malus-de-settings"
+path = "src/main.rs"
+
+[dependencies]
+malus-de-common = { workspace = true }
+gtk4 = { workspace = true }
+libadwaita = { workspace = true }
+glib = { workspace = true }
+gio = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+gdk-pixbuf = "0.20"

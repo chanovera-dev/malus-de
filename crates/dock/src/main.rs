@@ -3,7 +3,7 @@ use gtk4::prelude::*;
 use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Button, CssProvider,
     EventControllerMotion, GestureClick, Image, Label, Orientation, Overlay, Popover,
-    Separator,
+    Separator, Window,
 };
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use libadwaita as adw;
@@ -17,8 +17,14 @@ use std::rc::Rc;
 use tracing::{error, info, warn};
 
 const DOCK_CSS: &str = r#"
-window.malus-dock-window {
+window.malus-dock-window,
+window.malus-dock-window.background,
+window.malus-dock-window decoration {
     background-color: transparent;
+    background: transparent;
+    border: none;
+    outline: none;
+    box-shadow: none;
 }
 
 .dock-container {
@@ -26,7 +32,7 @@ window.malus-dock-window {
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 22px;
     padding: 6px 10px;
-    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.50);
+    box-shadow: none;
 }
 
 .dock-item-box {
@@ -78,7 +84,6 @@ window.malus-dock-window {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.50);
     transition: all 180ms cubic-bezier(0.2, 0.9, 0.3, 1.0);
     padding: 0;
-    overflow: hidden;
 }
 
 .dock-mini-window:hover {
@@ -136,7 +141,7 @@ window.malus-dock-window {
 .malus-popover-menu {
     background-color: rgba(30, 30, 36, 0.94);
     border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 12px;
+    border-radius: 14px;
     box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
     padding: 6px;
 }
@@ -158,12 +163,11 @@ window.malus-dock-window {
 .popover-menu-item {
     background: transparent;
     border: none;
-    border-radius: 6px;
+    border-radius: 8px;
     padding: 6px 14px;
     color: #e4e4e7;
     font-size: 13px;
     font-weight: 500;
-    text-align: left;
 }
 
 .popover-menu-item:hover {
@@ -172,8 +176,8 @@ window.malus-dock-window {
 }
 
 .popover-menu-item-danger:hover {
-    background-color: #dc2626 !important;
-    color: #ffffff !important;
+    background-color: #dc2626;
+    color: #ffffff;
 }
 
 /* Selector Visual de Aplicaciones estilo macOS (⌘Tab App Switcher HUD) */
@@ -210,7 +214,6 @@ window.malus-switcher-window {
     font-size: 12px;
     font-weight: 600;
     margin-top: 6px;
-    text-align: center;
 }
 
 .switcher-card.selected .switcher-title {
@@ -222,6 +225,9 @@ window.malus-switcher-window {
 fn main() {
     init_logging("malus_de_dock");
     info!("Iniciando Malus DE Floating Dock (GTK4 / Layer Shell)...");
+
+    // Esperar de forma activa a que el compositor esté listo y aceptando conexiones
+    malus_de_common::wayland::wait_for_wayland(10);
 
     if let Err(err) = adw::init() {
         warn!("Aviso al inicializar libadwaita: {:?}", err);
@@ -269,9 +275,11 @@ fn check_trash_full() -> bool {
 fn should_ignore_app(identifier: &str) -> bool {
     let lower = identifier.to_lowercase();
     let ignored = [
-        "malus", "top-bar", "layer-shell", "desktop", "gdm", "compositor",
+        "top-bar", "layer-shell", "desktop", "gdm", "compositor",
         "xwayland", "malus-session", "xsettings", "pipewire", "wireplumber",
-        "gnome-shell", "malus_de", "unknown", "malus-de-top-bar", "malus-de-dock"
+        "gnome-shell", "unknown", "malus-de-top-bar", "malus-de-dock",
+        "malus-de-wallpaper", "malus-de-link", "malus-de-spotlight",
+        "malus-de-notifications"
     ];
     ignored.iter().any(|ign| lower.contains(ign))
 }
@@ -318,8 +326,11 @@ fn build_dock_ui(app: &Application) {
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Malus DE Dock")
+        .decorated(false)
         .css_classes(["malus-dock-window"])
         .build();
+
+    window.set_decorated(false);
 
     // 1. Cargar configuración persistida desde dock.toml
     let dock_config = Rc::new(RefCell::new(DockConfig::load_or_create_default()));
@@ -335,7 +346,6 @@ fn build_dock_ui(app: &Application) {
         window.auto_exclusive_zone_enable();
     } else {
         info!("Layer Shell no detectado; ejecutando Dock en ventana flotante de desarrollo.");
-        window.set_decorated(false);
     }
 
     let dock_bar = GtkBox::builder()
@@ -374,8 +384,7 @@ fn build_dock_ui(app: &Application) {
     dock_bar.append(&trash_widget);
 
     // Ventana modal Overlay del Selector Visual de Aplicaciones (⌘Tab App Switcher HUD)
-    let switcher_window = ApplicationWindow::builder()
-        .application(app)
+    let switcher_window = Window::builder()
         .title("Malus DE App Switcher")
         .css_classes(["malus-switcher-window"])
         .build();
@@ -397,6 +406,11 @@ fn build_dock_ui(app: &Application) {
         .valign(gtk4::Align::Center)
         .build();
 
+    let win_dismiss_click = GestureClick::new();
+    win_dismiss_click.connect_released(|_, _, _, _| {
+        let _ = send_ipc_message(&IpcMessage::HideAppSwitcher);
+    });
+    switcher_box.set_visible(false);
     switcher_window.set_child(Some(&switcher_box));
 
     // Canales y estado compartido
@@ -448,10 +462,14 @@ fn build_dock_ui(app: &Application) {
     if let Ok(monitor) = gfile.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE) {
         let cfg_clone = dock_config.clone();
         let on_rf_mon = on_refresh.clone();
+        let win_mon = window.clone();
         monitor.connect_changed(move |_, _, _, event_type| {
             if event_type == gio::FileMonitorEvent::ChangesDoneHint || event_type == gio::FileMonitorEvent::Created {
                 info!("🔄 dock.toml modificado externamente en disco. Recargando...");
                 let new_cfg = DockConfig::load_or_create_default();
+                if gtk4_layer_shell::is_supported() {
+                    win_mon.set_margin(Edge::Bottom, new_cfg.floating_gap as i32);
+                }
                 *cfg_clone.borrow_mut() = new_cfg;
                 on_rf_mon();
             }
@@ -592,6 +610,9 @@ fn build_dock_ui(app: &Application) {
                 IpcMessage::ReloadDockConfig => {
                     info!("🔄 IPC ReloadDockConfig recibido");
                     let new_cfg = DockConfig::load_or_create_default();
+                    if gtk4_layer_shell::is_supported() {
+                        win_ref.set_margin(Edge::Bottom, new_cfg.floating_gap as i32);
+                    }
                     *cfg_ipc.borrow_mut() = new_cfg;
                     on_rf_ipc();
                 }
@@ -658,8 +679,17 @@ fn build_dock_ui(app: &Application) {
                             .build();
                         card.append(&title_label);
 
+                        // Conmutar a la ventana al hacer clic sobre su tarjeta
+                        let target_wid = item.window_id;
+                        let card_click = GestureClick::new();
+                        card_click.connect_released(move |_, _, _, _| {
+                            let _ = send_ipc_message(&IpcMessage::SwitchToWindow { window_id: target_wid });
+                        });
+                        card.add_controller(card_click);
+
                         switcher_box_ipc.append(&card);
                     }
+                    switcher_win_ipc.set_visible(true);
                     switcher_win_ipc.present();
                 }
                 IpcMessage::UpdateAppSwitcher { selected_index } => {
@@ -676,7 +706,10 @@ fn build_dock_ui(app: &Application) {
                     }
                 }
                 IpcMessage::HideAppSwitcher => {
-                    switcher_win_ipc.set_visible(false);
+                    switcher_box_ipc.set_visible(false);
+                    while let Some(c) = switcher_box_ipc.first_child() {
+                        switcher_box_ipc.remove(&c);
+                    }
                 }
                 _ => {}
             }
@@ -996,6 +1029,10 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
     menu_box.append(&btn_empty);
     popover.set_child(Some(&menu_box));
     popover.set_parent(&btn);
+    let p_unroot = popover.clone();
+    btn.connect_unrealize(move |_| {
+        p_unroot.unparent();
+    });
 
     let right_click = GestureClick::new();
     right_click.set_button(3);
@@ -1087,22 +1124,32 @@ fn create_dock_item(
             info!("Lanzando aplicación desde Dock: {} (`{}`)", name, cmd);
             let parts: Vec<&str> = cmd.split_whitespace().collect();
             if let Some((exe, args)) = parts.split_first() {
-                let mut command = Command::new(exe);
+                let target_exe = if *exe == "gnome-control-center" {
+                    "malus-de-settings"
+                } else {
+                    *exe
+                };
+                let resolved_exe = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|d| d.join(target_exe)))
+                    .filter(|p| p.exists())
+                    .or_else(|| {
+                        let rel = std::path::PathBuf::from("/home/cristian/Apps/malus-de/target/release")
+                            .join(target_exe);
+                        if rel.exists() { Some(rel) } else { None }
+                    })
+                    .unwrap_or_else(|| std::path::PathBuf::from(target_exe));
+                let mut command = Command::new(&resolved_exe);
                 command.args(args);
                 if let Ok(wayland_disp) = std::env::var("WAYLAND_DISPLAY") {
                     command.env("WAYLAND_DISPLAY", wayland_disp);
                 }
+                command.env("XDG_CURRENT_DESKTOP", "Malus");
                 command.env("GDK_BACKEND", "wayland");
-                command.env("GSK_RENDERER", "cairo");
                 if let Ok(xdg_rt) = std::env::var("XDG_RUNTIME_DIR") {
                     command.env("XDG_RUNTIME_DIR", xdg_rt);
                 }
-                if let Ok(cfg_home) = std::env::var("XDG_CONFIG_HOME") {
-                    command.env("XDG_CONFIG_HOME", cfg_home);
-                } else if let Ok(home) = std::env::var("HOME") {
-                    command.env("XDG_CONFIG_HOME", format!("{}/.config/malus-de", home));
-                }
-                command.env("GSETTINGS_BACKEND", "keyfile");
+                command.env_remove("LD_PRELOAD");
 
                 match command.spawn() {
                     Ok(mut child) => {
@@ -1272,6 +1319,10 @@ fn create_dock_item(
 
     popover.set_child(Some(&menu_box));
     popover.set_parent(&btn);
+    let p_unroot = popover.clone();
+    btn.connect_unrealize(move |_| {
+        p_unroot.unparent();
+    });
 
     let right_click = GestureClick::new();
     right_click.set_button(3); // Clic derecho

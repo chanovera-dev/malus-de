@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use malus_de_common::logging::init_logging;
+use std::os::unix::process::CommandExt;
 use std::process::Command;
 
 #[derive(Parser, Debug)]
@@ -56,10 +57,36 @@ enum Commands {
         component: Option<String>,
     },
 
-    /// Gestiona monitores, escalado fraccionario y enlace físico 1:1 (TrueSize Link)
+    /// Gestiona monitores, disposición, escalado fraccionario y enlace físico 1:1 (TrueSize Link)
     Displays {
         #[command(subcommand)]
         action: DisplaysAction,
+    },
+
+    /// Gestiona la distribución de teclado XKB en vivo (por defecto 'latam' Español Latinoamericano)
+    Keyboard {
+        #[command(subcommand)]
+        action: KeyboardAction,
+    },
+
+    /// Cierra y descarta el selector visual de aplicaciones (Alt-Tab / App Switcher)
+    DismissAppSwitcher,
+
+    /// Cierra la sesión actual de Malus DE de forma limpia y vuelve al gestor de sesión (GDM)
+    Logout,
+}
+
+#[derive(Subcommand, Debug)]
+enum KeyboardAction {
+    /// Muestra la distribución de teclado activa
+    Status,
+    /// Cambia la distribución de teclado en vivo (ej. 'latam', 'es', 'us')
+    Set {
+        /// Código XKB de distribución ('latam', 'es', 'us')
+        layout: String,
+        /// Variante opcional (ej. 'deadtilde')
+        #[arg(short, long, default_value = "")]
+        variant: String,
     },
 }
 
@@ -72,14 +99,42 @@ enum DisplaysAction {
         /// 'enable' o 'disable'
         mode: String,
     },
+    /// Aplica un ajuste predefinido de enlace de resolución (1 = LG 24" 171% y Mi 27" 150%, 2 = LG 24" 152.5% y Mi 27" 133.33%)
+    LinkPreset {
+        /// Número de ajuste (1 o 2)
+        preset: u8,
+    },
     /// Establece la escala maestra (ej. 1.5, 1.6667, 2.0) y recalcula todas las pantallas 1:1
     SetScale {
         scale: f64,
     },
-    /// Define la diagonal real en pulgadas para una pantalla (ej. 'DP-1 27.0' o 'HDMI-1 24.0')
+    /// Establece la escala de un monitor específico por índice (0 = DP-1, 1 = HDMI-A-1)
+    SetOutputScale {
+        /// Índice del monitor (0 o 1)
+        index: usize,
+        /// Factor de escala (ej. 1.25, 1.5, 1.6875, 2.0)
+        scale: f64,
+    },
+    /// Intercambia el orden horizontal (Izquierda <-> Derecha) de las pantallas
+    SwapOrder,
+    /// Alinea verticalmente las pantallas ('top', 'center', 'bottom', 'desk')
+    Align {
+        mode: String,
+    },
+    /// Define la diagonal real en pulgadas para una pantalla (ej. 'DP-1 27.0' o 'HDMI-A-1 24.0')
     SetDiagonal {
         connector: String,
         inches: f64,
+    },
+    /// Establece el radio de curvatura squircle de las esquinas del escritorio (border-radius en px)
+    SetRadius {
+        /// Radio en puntos lógicos (ej. 0.0 para recto, 32.0 por defecto)
+        radius: f64,
+    },
+    /// Establece el radio de curvatura squircle de las ventanas (border-radius en px)
+    SetWindowRadius {
+        /// Radio en puntos lógicos (ej. 0.0 para recto, 32.0 por defecto)
+        radius: f64,
     },
 }
 
@@ -219,6 +274,7 @@ fn main() -> Result<()> {
                 ],
             };
 
+            let wayland_disp = std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-1".to_string());
             for binary in targets {
                 println!("  ↳ Reiniciando {}...", binary);
                 let _ = Command::new("killall").arg("-9").arg(binary).status();
@@ -228,7 +284,11 @@ fn main() -> Result<()> {
                 } else {
                     binary.to_string()
                 };
-                let _ = Command::new(&exec_cmd).spawn();
+                let mut cmd = Command::new(&exec_cmd);
+                cmd.env("WAYLAND_DISPLAY", &wayland_disp);
+                cmd.env("GDK_BACKEND", "wayland");
+                cmd.process_group(0);
+                let _ = cmd.spawn();
             }
             println!("✨ Componentes recargados con éxito sin afectar ventanas ni aplicaciones abiertas.");
         }
@@ -241,6 +301,8 @@ fn main() -> Result<()> {
                     println!("╚═══════════════════════════════════════════════════════════════════════════════╝");
                     println!(" 🔗 Enlace Físico 1:1 (TrueSize Link): {}", if cfg.linked_physical_1to1 { "ACTIVADO ✅" } else { "DESACTIVADO ❌" });
                     println!(" 🎯 Escala Maestra Principal: {:.4} ({:.1}%)", cfg.master_scale, cfg.master_scale * 100.0);
+                    println!(" 📐 Radio de Esquinas (Border-Radius Pantallas): {:.1} px", cfg.screen_corner_radius);
+                    println!(" 🪟 Radio de Esquinas (Border-Radius Ventanas):   {:.1} px", cfg.window_corner_radius);
                     println!("─────────────────────────────────────────────────────────────────────────────────");
                     for (i, o) in cfg.outputs.iter().enumerate() {
                         let diag = o.effective_diagonal();
@@ -267,10 +329,34 @@ fn main() -> Result<()> {
                         cfg.apply_1to1_link();
                         println!("✅ Enlace Físico 1:1 ACTIVADO. Escalas recalculadas en proporción exacta a PPI.");
                     } else {
+                        cfg.recalculate_layout();
                         println!("❌ Enlace Físico 1:1 DESACTIVADO. Cada monitor ahora tiene escala independiente.");
                     }
                     if let Err(e) = cfg.save() {
                         eprintln!("Error al guardar configuración: {:?}", e);
+                    }
+                    let _ = malus_de_common::ipc::IpcClient::send_command(
+                        malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig,
+                    );
+                }
+                DisplaysAction::LinkPreset { preset } => {
+                    if preset != 1 && preset != 2 {
+                        eprintln!("Preset inválido ({}). Solo están disponibles los ajustes 1 y 2:", preset);
+                        eprintln!("  1: LG 24\" a 171% (1.71) y Mi 27\" a 150% (1.50)");
+                        eprintln!("  2: LG 24\" a 152.5% (1.525) y Mi 27\" a 133.33% (1.333333)");
+                        return Ok(());
+                    }
+                    cfg.apply_linked_preset(preset);
+                    if let Err(e) = cfg.save() {
+                        eprintln!("Error al guardar configuración: {:?}", e);
+                    }
+                    let _ = malus_de_common::ipc::IpcClient::send_command(
+                        malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig,
+                    );
+                    println!("✨ Ajuste #{} de enlace de resolución aplicado exitosamente:", preset);
+                    for o in &cfg.outputs {
+                        let (lw, lh) = o.logical_size();
+                        println!("   ↳ {} ({}): {:.4}x ({:.2}%) -> {}×{} en coords ({}, {})", o.name, o.connector, o.scale, o.scale * 100.0, lw, lh, o.x, o.y);
                     }
                 }
                 DisplaysAction::SetScale { scale } => {
@@ -282,11 +368,55 @@ fn main() -> Result<()> {
                     if let Err(e) = cfg.save() {
                         eprintln!("Error al guardar configuración: {:?}", e);
                     }
+                    let _ = malus_de_common::ipc::IpcClient::send_command(
+                        malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig,
+                    );
                     println!("✨ Escala maestra actualizada a {:.4}x ({:.1}%).", scale, scale * 100.0);
-                    if cfg.linked_physical_1to1 {
-                        for o in &cfg.outputs {
-                            println!("   ↳ {}: {:.4}x ({:.1}%)", o.name, o.scale, o.scale * 100.0);
-                        }
+                    for o in &cfg.outputs {
+                        println!("   ↳ {} ({}): {:.4}x ({:.1}%) en ({}, {})", o.name, o.connector, o.scale, o.scale * 100.0, o.x, o.y);
+                    }
+                }
+                DisplaysAction::SetOutputScale { index, scale } => {
+                    if scale < 0.5 || scale > 4.0 {
+                        eprintln!("Escala fuera de rango permitido (0.5x - 4.0x): {}", scale);
+                        return Ok(());
+                    }
+                    cfg.set_output_scale(index, scale);
+                    if let Err(e) = cfg.save() {
+                        eprintln!("Error al guardar configuración: {:?}", e);
+                    }
+                    let _ = malus_de_common::ipc::IpcClient::send_command(
+                        malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig,
+                    );
+                    println!("✨ Escala de monitor #{} actualizada (linked_1to1={}).", index, cfg.linked_physical_1to1);
+                    for o in &cfg.outputs {
+                        println!("   ↳ {} ({}): {:.4}x ({:.1}%) en ({}, {})", o.name, o.connector, o.scale, o.scale * 100.0, o.x, o.y);
+                    }
+                }
+                DisplaysAction::SwapOrder => {
+                    cfg.swap_horizontal_order();
+                    if let Err(e) = cfg.save() {
+                        eprintln!("Error al guardar configuración: {:?}", e);
+                    }
+                    let _ = malus_de_common::ipc::IpcClient::send_command(
+                        malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig,
+                    );
+                    println!("⇄ Orden horizontal de pantallas intercambiado:");
+                    for o in &cfg.outputs {
+                        println!("   ↳ {} ({}): pos=({}, {})", o.name, o.connector, o.x, o.y);
+                    }
+                }
+                DisplaysAction::Align { mode } => {
+                    cfg.set_vertical_alignment(&mode);
+                    if let Err(e) = cfg.save() {
+                        eprintln!("Error al guardar configuración: {:?}", e);
+                    }
+                    let _ = malus_de_common::ipc::IpcClient::send_command(
+                        malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig,
+                    );
+                    println!("📐 Alineación vertical '{}' aplicada:", mode);
+                    for o in &cfg.outputs {
+                        println!("   ↳ {} ({}): pos=({}, {})", o.name, o.connector, o.x, o.y);
                     }
                 }
                 DisplaysAction::SetDiagonal { connector, inches } => {
@@ -295,15 +425,88 @@ fn main() -> Result<()> {
                         println!("📐 Diagonal del monitor {} actualizada a {:.1} pulgadas.", connector, inches);
                         if cfg.linked_physical_1to1 {
                             cfg.apply_1to1_link();
+                        } else {
+                            cfg.recalculate_layout();
                         }
                         if let Err(e) = cfg.save() {
                             eprintln!("Error al guardar configuración: {:?}", e);
                         }
+                        let _ = malus_de_common::ipc::IpcClient::send_command(
+                            malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig,
+                        );
                     } else {
                         eprintln!("No se encontró monitor con conector '{}'", connector);
                     }
                 }
+                DisplaysAction::SetRadius { radius } => {
+                    if radius < 0.0 || radius > 100.0 {
+                        eprintln!("Radio fuera de rango permitido (0.0 - 100.0 px): {}", radius);
+                        return Ok(());
+                    }
+                    cfg.screen_corner_radius = radius;
+                    if let Err(e) = cfg.save() {
+                        eprintln!("Error al guardar configuración: {:?}", e);
+                    }
+                    let _ = malus_de_common::ipc::IpcClient::send_command(
+                        malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig,
+                    );
+                    println!("✨ Border-radius de las pantallas actualizado a {:.1} px.", radius);
+                }
+                DisplaysAction::SetWindowRadius { radius } => {
+                    if radius < 0.0 || radius > 100.0 {
+                        eprintln!("Radio fuera de rango permitido (0.0 - 100.0 px): {}", radius);
+                        return Ok(());
+                    }
+                    cfg.window_corner_radius = radius;
+                    if let Err(e) = cfg.save() {
+                        eprintln!("Error al guardar configuración: {:?}", e);
+                    }
+                    let _ = malus_de_common::ipc::IpcClient::send_command(
+                        malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig,
+                    );
+                    println!("✨ Border-radius de las ventanas actualizado a {:.1} px.", radius);
+                }
             }
+        }
+        Commands::Keyboard { action } => match action {
+            KeyboardAction::Status => {
+                let cfg = malus_de_common::config::InputConfig::load();
+                println!("⌨️  Distribución XKB activa: '{}' ({})", cfg.keyboard_layout, cfg.layout_display_name());
+                println!("   • Variante: '{}'", cfg.keyboard_variant);
+                println!("   • Modelo:   '{}'", cfg.keyboard_model);
+            }
+            KeyboardAction::Set { layout, variant } => {
+                let mut cfg = malus_de_common::config::InputConfig::load();
+                cfg.keyboard_layout = layout.clone();
+                cfg.keyboard_variant = variant.clone();
+                if let Err(e) = cfg.save() {
+                    eprintln!("Error al guardar input.toml: {:?}", e);
+                }
+                let _ = malus_de_common::ipc::IpcClient::send_command(
+                    malus_de_common::ipc::IpcMessage::SetKeyboardLayout {
+                        layout: layout.clone(),
+                        variant: variant.clone(),
+                    },
+                );
+                println!(
+                    "✅ Distribución de teclado actualizada en vivo a '{}' ({})",
+                    cfg.keyboard_layout,
+                    cfg.layout_display_name()
+                );
+            }
+        },
+        Commands::DismissAppSwitcher => {
+            println!("Descartando selector visual de aplicaciones (App Switcher)...");
+            let _ = malus_de_common::ipc::send_ipc_message(&malus_de_common::ipc::IpcMessage::HideAppSwitcher);
+        }
+        Commands::Logout => {
+            println!("👋 Cerrando sesión de Malus DE...");
+            let _ = Command::new("pkill")
+                .args(["-TERM", "-x", "malus-de-compositor"])
+                .status();
+            let _ = Command::new("killall")
+                .args(["-TERM", "malus-de-compositor"])
+                .status();
         }
     }
 

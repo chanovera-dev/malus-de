@@ -410,6 +410,7 @@ pub fn create_global_menu_widget(dbus_menu_service: Arc<DbusMenuService>) -> Glo
         .halign(gtk4::Align::Start)
         .build();
     popover.set_offset(0, 4);
+    crate::ui::theme::register_popover(&popover);
 
     let content = GtkBox::builder()
         .orientation(Orientation::Vertical)
@@ -542,6 +543,7 @@ fn render_dbus_categories(
             .halign(gtk4::Align::Start)
             .build();
         popover.set_offset(0, 4);
+        crate::ui::theme::register_popover(&popover);
 
         let menu_box = GtkBox::builder()
             .orientation(Orientation::Vertical)
@@ -620,6 +622,7 @@ fn append_dbus_menu_item(
             .position(gtk4::PositionType::Right)
             .build();
         sub_popover.set_parent(&row_btn);
+        crate::ui::theme::register_popover(&sub_popover);
 
         let sub_box = GtkBox::builder()
             .orientation(Orientation::Vertical)
@@ -741,6 +744,7 @@ fn render_static_categories(
             .halign(gtk4::Align::Start)
             .build();
         popover.set_offset(0, 4);
+        crate::ui::theme::register_popover(&popover);
 
         let menu_box = GtkBox::builder()
             .orientation(Orientation::Vertical)

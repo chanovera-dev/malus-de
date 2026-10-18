@@ -16,11 +16,11 @@ use smithay::{
                 surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement, WaylandSurfaceTexture},
                 Element, Kind,
             },
-            Color32F, Frame, Renderer,
+            Color32F, Frame, Renderer, Texture,
         },
         winit::{self, WinitEvent},
     },
-    desktop::space::space_render_elements,
+
     input::{
         keyboard::{keysyms, FilterResult},
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
@@ -40,7 +40,7 @@ use smithay::{
         shell::wlr_layer::Layer,
     },
 };
-use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge;
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::{ResizeEdge, State as XdgState};
 use tracing::{info, warn};
 use malus_de_common::ipc::IpcMessage;
 
@@ -71,10 +71,32 @@ pub fn run_winit() -> Result<()> {
     let mut display: Display<MalusState> = Display::new().context("Error al crear Display Wayland")?;
     let mut state = MalusState::new(&display);
 
-    let keyboard = state
-        .seat
-        .add_keyboard(Default::default(), 200, 200)
-        .map_err(|e| anyhow::anyhow!("Error al inicializar teclado: {e:?}"))?;
+    let input_cfg = malus_de_common::config::InputConfig::load();
+    let xkb_cfg = smithay::input::keyboard::XkbConfig {
+        rules: "",
+        model: &input_cfg.keyboard_model,
+        layout: &input_cfg.keyboard_layout,
+        variant: &input_cfg.keyboard_variant,
+        options: input_cfg.keyboard_options.clone(),
+    };
+    let keyboard = match state.seat.add_keyboard(xkb_cfg, 200, 200) {
+        Ok(kb) => {
+            info!(
+                "⌨️ Teclado XKB inicializado (winit): layout='{}' ({}), variant='{}'",
+                input_cfg.keyboard_layout,
+                input_cfg.layout_display_name(),
+                input_cfg.keyboard_variant
+            );
+            kb
+        }
+        Err(e) => {
+            warn!("⚠️ Falló carga de XKB layout '{}': {:?}. Usando fallback US.", input_cfg.keyboard_layout, e);
+            state
+                .seat
+                .add_keyboard(Default::default(), 200, 200)
+                .map_err(|e| anyhow::anyhow!("Error al inicializar teclado: {e:?}"))?
+        }
+    };
     let pointer = state.seat.add_pointer();
 
     // Crear socket de escucha de clientes Wayland (wayland-1 .. 32)
@@ -122,6 +144,10 @@ pub fn run_winit() -> Result<()> {
     let dark_acrylic = Color32F::new(0.094, 0.094, 0.106, 1.0);
     let start_time = Instant::now();
     let mut clients = Vec::new();
+    let mut current_displays_cfg = malus_de_common::config::DisplaysConfig::load();
+    let mut squircle_corner_cache: std::collections::HashMap<i32, [smithay::backend::renderer::gles::GlesTexture; 4]> = std::collections::HashMap::new();
+    let mut blur_pipeline: Option<crate::blur::DualKawaseBlur> = None;
+    let mut window_squircle_shader: Option<crate::window_corners::WindowSquircleShader> = None;
 
     while state.is_running {
         let status = winit_event_loop.dispatch_new_events(|event| match event {
@@ -150,6 +176,21 @@ pub fn run_winit() -> Result<()> {
                         event.time_msec(),
                         |state, modifiers, keysym_handle| {
                             let sym = keysym_handle.modified_sym();
+                            let is_modifier_sym = sym == keysyms::KEY_Alt_L.into()
+                                || sym == keysyms::KEY_Alt_R.into()
+                                || sym == keysyms::KEY_Super_L.into()
+                                || sym == keysyms::KEY_Super_R.into()
+                                || sym == keysyms::KEY_Meta_L.into()
+                                || sym == keysyms::KEY_Meta_R.into()
+                                || keysym_handle.raw_syms().iter().any(|&s| {
+                                    s == keysyms::KEY_Alt_L.into()
+                                        || s == keysyms::KEY_Alt_R.into()
+                                        || s == keysyms::KEY_Super_L.into()
+                                        || s == keysyms::KEY_Super_R.into()
+                                        || s == keysyms::KEY_Meta_L.into()
+                                        || s == keysyms::KEY_Meta_R.into()
+                                });
+
                             let has_super = modifiers.logo;
                             let has_alt = modifiers.alt;
                             let has_ctrl = modifiers.ctrl;
@@ -157,6 +198,7 @@ pub fn run_winit() -> Result<()> {
                             let is_space = sym == keysyms::KEY_space.into();
                             let is_k = sym == keysyms::KEY_k.into() || sym == keysyms::KEY_K.into();
                             let is_tab = sym == keysyms::KEY_Tab.into() || sym == keysyms::KEY_ISO_Left_Tab.into() || key == 23;
+                            let is_return = sym == keysyms::KEY_Return.into() || sym == keysyms::KEY_KP_Enter.into();
                             let is_w = sym == keysyms::KEY_w.into() || sym == keysyms::KEY_W.into();
                             let is_q = sym == keysyms::KEY_q.into() || sym == keysyms::KEY_Q.into();
                             let is_h = sym == keysyms::KEY_h.into() || sym == keysyms::KEY_H.into();
@@ -179,7 +221,16 @@ pub fn run_winit() -> Result<()> {
 
                                 // 2. Navegación en el App Switcher (Selector Visual ⌘Tab) mientras está activo
                                 if state.app_switcher.is_active {
-                                    if is_tab {
+                                    if is_return {
+                                        info!("🎯 AppSwitcher commit vía Return/Enter, enfocando ventana");
+                                        state.app_switcher.is_active = false;
+                                        state.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
+                                        if !state.app_switcher.items.is_empty() {
+                                            let target_id = state.app_switcher.items[state.app_switcher.selected_index].window_id;
+                                            state.switch_to_window(target_id);
+                                        }
+                                        return FilterResult::Intercept(());
+                                    } else if is_tab {
                                         let has_shift = modifiers.shift;
                                         let len = state.app_switcher.items.len();
                                         if len > 0 {
@@ -333,8 +384,8 @@ pub fn run_winit() -> Result<()> {
                             } else {
                                 // 7. Liberación de teclas (Key Release)
                                 // Cuando el usuario suelta Super o Alt, confirmar selección en App Switcher
-                                if state.app_switcher.is_active && !modifiers.logo && !modifiers.alt {
-                                    info!("🎯 AppSwitcher commit: soltado Super/Alt, enfocando ventana");
+                                if state.app_switcher.is_active && ((!modifiers.logo && !modifiers.alt) || is_modifier_sym) {
+                                    info!("🎯 AppSwitcher commit: soltado Super/Alt (is_mod={}), enfocando ventana", is_modifier_sym);
                                     state.app_switcher.is_active = false;
                                     state.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
                                     if !state.app_switcher.items.is_empty() {
@@ -356,6 +407,7 @@ pub fn run_winit() -> Result<()> {
                     let layer_target = {
                         let layer_map = smithay::desktop::layer_map_for_output(&output);
                         let under_layer = layer_map.layer_under(Layer::Overlay, point)
+                            .filter(|l| !(l.namespace() == "malus-app-switcher" && !state.app_switcher.is_active))
                             .or_else(|| layer_map.layer_under(Layer::Top, point));
 
                         under_layer.and_then(|layer| {
@@ -408,6 +460,7 @@ pub fn run_winit() -> Result<()> {
                     let layer_target = {
                         let layer_map = smithay::desktop::layer_map_for_output(&output);
                         let under_layer = layer_map.layer_under(Layer::Overlay, point)
+                            .filter(|l| !(l.namespace() == "malus-app-switcher" && !state.app_switcher.is_active))
                             .or_else(|| layer_map.layer_under(Layer::Top, point));
 
                         under_layer.and_then(|layer| {
@@ -454,7 +507,7 @@ pub fn run_winit() -> Result<()> {
                     let motion_serial = SERIAL_COUNTER.next_serial();
                     pointer.motion(
                         &mut state,
-                        under_target,
+                        under_target.clone(),
                         &MotionEvent {
                             location: point,
                             serial: motion_serial,
@@ -464,10 +517,20 @@ pub fn run_winit() -> Result<()> {
 
                     let btn_serial = SERIAL_COUNTER.next_serial();
                     if is_pressed {
+                        if state.app_switcher.is_active {
+                            info!("🖱️ Click detectado mientras AppSwitcher está activo -> cerrando AppSwitcher");
+                            state.app_switcher.is_active = false;
+                            state.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
+                        }
+
                         // Si hay popups activos y el clic NO fue sobre el popup, descartamos los popups
-                        let clicked_on_popup = layer_info.as_ref().map(|(s, _, _)| {
-                            state.active_popups.iter().any(|p| p.wl_surface() == s)
-                        }).unwrap_or(false);
+                        let clicked_on_popup = under_target
+                            .as_ref()
+                            .map(|(s, _)| {
+                                state.active_popups.iter().any(|p| p.wl_surface() == s)
+                                    || state.popups.find_popup(s).is_some()
+                            })
+                            .unwrap_or(false);
 
                         if !clicked_on_popup && !state.active_popups.is_empty() {
                             state.dismiss_all_popups();
@@ -476,6 +539,7 @@ pub fn run_winit() -> Result<()> {
                         // Liberar cualquier grab residual para que los clics nunca se queden congelados
                         if pointer.is_grabbed() {
                             tracing::warn!("⚠️ Grab de puntero residual detectado al hacer clic; liberando grab");
+                            state.snap_preview = None;
                             pointer.unset_grab(&mut state, btn_serial, event.time_msec());
                         }
                         if keyboard.is_grabbed() {
@@ -562,6 +626,8 @@ pub fn run_winit() -> Result<()> {
                             info!("🖱️ Clic en espacio libre del escritorio: button={:#x}, pos={:?}", event.button_code(), point);
                             state.notify_active_app(None);
                         }
+                    } else {
+                        state.snap_preview = None;
                     }
 
                     pointer.button(
@@ -573,6 +639,9 @@ pub fn run_winit() -> Result<()> {
                             state: event.state(),
                         },
                     );
+                    if !pointer.is_grabbed() {
+                        state.snap_preview = None;
+                    }
                     pointer.frame(&mut state);
                 }
                 InputEvent::PointerAxis { event } => {
@@ -614,26 +683,6 @@ pub fn run_winit() -> Result<()> {
         // Renderizado del frame
         {
             if let Ok((renderer, mut framebuffer)) = backend.bind() {
-                let elements = match space_render_elements::<
-                    GlesRenderer,
-                    smithay::desktop::Window,
-                    _,
-                >(renderer, [&state.space], &output, 1.0)
-                {
-                    Ok(elems) => {
-                        if !elems.is_empty() {
-                            static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-                            if !ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                                info!("🎨 Frame con elementos visibles renderizado: total elementos={}", elems.len());
-                            }
-                        }
-                        elems
-                    }
-                    Err(err) => {
-                        warn!("Error al obtener render elements de space: {:?}", err);
-                        Vec::new()
-                    }
-                };
 
                 let now = Instant::now();
                 let mut anim_data = Vec::new();
@@ -652,38 +701,264 @@ pub fn run_winit() -> Result<()> {
                     anim_data.push((anim.clone(), elems));
                 }
 
+                if state.pending_displays_reload {
+                    state.pending_displays_reload = false;
+                    current_displays_cfg = malus_de_common::config::DisplaysConfig::load();
+                    squircle_corner_cache.clear();
+                }
+
+                let corner_radius_pt = current_displays_cfg.screen_corner_radius;
+                let phys_r = if corner_radius_pt > 0.0 {
+                    let r = corner_radius_pt.round() as i32;
+                    if r > 2 {
+                        if !squircle_corner_cache.contains_key(&r) {
+                            if let Some(textures) = super::drm::create_squircle_corner_textures(renderer, r) {
+                                squircle_corner_cache.insert(r, textures);
+                            }
+                        }
+                        Some(r)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let win_corner_radius_pt = current_displays_cfg.window_corner_radius;
+                let win_phys_r = if win_corner_radius_pt > 0.0 {
+                    let r = win_corner_radius_pt.round() as i32;
+                    if r > 2 { Some(r) } else { None }
+                } else {
+                    None
+                };
+
+                let layer_map = smithay::desktop::layer_map_for_output(&output);
+                let mut lower_elements = Vec::new();
+                let mut upper_elements = Vec::new();
+                for surface in layer_map.layers().rev() {
+                    if surface.namespace() == "malus-app-switcher" && !state.app_switcher.is_active {
+                        continue;
+                    }
+                    if let Some(geo) = layer_map.layer_geometry(surface) {
+                        let elems = smithay::backend::renderer::element::AsRenderElements::<GlesRenderer>::render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
+                            surface,
+                            renderer,
+                            geo.loc.to_physical_precise_round(1.0),
+                            smithay::utils::Scale::from(1.0),
+                            1.0,
+                        );
+                        if matches!(surface.layer(), Layer::Background | Layer::Bottom) {
+                            lower_elements.extend(elems);
+                        } else {
+                            upper_elements.extend(elems);
+                        }
+                    }
+                }
+
+                let mut window_render_data = Vec::new();
+                let output_geo = state.space.output_geometry(&output).unwrap_or_else(|| Rectangle::new((0, 0).into(), (size.w, size.h).into()));
+                for window in state.space.elements() {
+                    if let Some(loc) = state.space.element_location(window) {
+                        let geo = window.geometry();
+                        let win_global_rect = Rectangle::new(loc, geo.size);
+                        if output_geo.overlaps(win_global_rect) {
+                            let phys_loc = (loc - geo.loc - output_geo.loc).to_physical_precise_round(1.0);
+                            let elems = smithay::backend::renderer::element::AsRenderElements::<GlesRenderer>::render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
+                                window,
+                                renderer,
+                                phys_loc,
+                                smithay::utils::Scale::from(1.0),
+                                1.0,
+                            );
+
+                            let is_maximized_or_fullscreen = window.toplevel().map(|t| {
+                                let states = &t.current_state().states;
+                                states.contains(XdgState::Maximized) || states.contains(XdgState::Fullscreen)
+                            }).unwrap_or(false);
+
+                            let main_surface = window.wl_surface();
+                            let root_id = main_surface.as_ref().map(|ms| {
+                                smithay::backend::renderer::element::Id::from_wayland_resource(ms.as_ref())
+                            });
+
+                            let should_round = win_phys_r.is_some() && !is_maximized_or_fullscreen;
+                            let content_offset = geo.loc.to_physical_precise_round(1.0);
+                            let content_size = geo.size.to_physical_precise_round(1.0);
+
+                            window_render_data.push((root_id, elems, should_round, content_offset, content_size));
+                        }
+                    }
+                }
+
+                // Inicializar shader de recorte squircle para ventanas si aún no existe
+                if window_squircle_shader.is_none() {
+                    window_squircle_shader = crate::window_corners::WindowSquircleShader::new(renderer);
+                }
+
                 if let Ok(mut frame) = renderer.render(&mut framebuffer, size, Transform::Flipped180) {
                     let _ = frame.clear(dark_acrylic, &[damage]);
-                    let _ = draw_render_elements(&mut frame, 1.0, &elements, &[damage]);
+                    // 1. Renderizar fondo (wallpaper y capas inferiores)
+                    if !lower_elements.is_empty() {
+                        let _ = draw_render_elements(&mut frame, 1.0, &lower_elements, &[damage]);
+                    }
+
+                    // 2. Renderizar cada ventana con esquinas squircle superelípticas (n=4.2) mediante shader UV local en GPU
+                    for (root_id, win_elems, should_round, content_offset, content_size) in &window_render_data {
+                        if win_elems.is_empty() {
+                            continue;
+                        }
+
+                        if *should_round {
+                            for elem in win_elems {
+                                let is_root = root_id.as_ref().map(|id| elem.id() == id).unwrap_or(true);
+                                if is_root {
+                                    if let (Some(r), Some(ref shader)) = (win_phys_r, window_squircle_shader.as_ref()) {
+                                        let elem_geo = elem.geometry(smithay::utils::Scale::from(1.0));
+                                        shader.apply_to_frame(&mut frame, elem_geo.size, *content_offset, *content_size, r);
+                                    }
+                                }
+
+                                let _ = draw_render_elements(&mut frame, 1.0, std::slice::from_ref(elem), &[damage]);
+
+                                if is_root {
+                                    frame.clear_tex_program_override();
+                                }
+                            }
+                        } else {
+                            let _ = draw_render_elements(&mut frame, 1.0, win_elems, &[damage]);
+                        }
+                    }
+
+                    // 2. Aplicar desenfoque de fondo Dual Kawase por GPU a las capas y popups translúcidos
+                    if blur_pipeline.is_none() {
+                        blur_pipeline = frame.with_context(|gl| crate::blur::DualKawaseBlur::new(gl)).ok().flatten();
+                    }
+
+                    if let Some(ref mut blur) = blur_pipeline {
+                        let screen_size = size;
+                        let _ = frame.with_context(|gl| {
+                            for surface in layer_map.layers() {
+                                if matches!(surface.layer(), Layer::Top | Layer::Overlay) {
+                                    let ns = surface.namespace();
+                                    if ns == "malus-app-switcher" && !state.app_switcher.is_active {
+                                        continue;
+                                    }
+                                    if ns == "malus-top-bar" {
+                                        continue;
+                                    }
+                                    if let Some(geo) = layer_map.layer_geometry(surface) {
+                                        let phys_rect = geo.to_physical_precise_round(1.0);
+                                        let radius = match ns.as_ref() {
+                                            "malus-dock" => 22.0,
+                                            "malus-spotlight" => 18.0,
+                                            "malus-notifications" => 16.0,
+                                            _ => 0.0,
+                                        };
+                                        if radius > 0.0 {
+                                            blur.render_blur(gl, screen_size, phys_rect, radius);
+                                        }
+
+                                        // Desenfocar popups / menús emergentes de esta capa (Apple menu, Control Center, etc.)
+                                        for (popup, rel_loc) in smithay::desktop::PopupManager::popups_for_surface(surface.wl_surface()) {
+                                            let geo_rect = popup.geometry();
+                                            let (popup_w, popup_h) = if geo_rect.size.w > 0 && geo_rect.size.h > 0 {
+                                                (geo_rect.size.w, geo_rect.size.h)
+                                            } else {
+                                                smithay::wayland::compositor::with_states(popup.wl_surface(), |states| {
+                                                    let data = states.data_map.get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>();
+                                                    if let Some(d) = data {
+                                                        if let Some(dim) = d.lock().unwrap().buffer_size() {
+                                                            (dim.w, dim.h)
+                                                        } else {
+                                                            (0, 0)
+                                                        }
+                                                    } else {
+                                                        (0, 0)
+                                                    }
+                                                })
+                                            };
+                                            if popup_w > 0 && popup_h > 0 {
+                                                let popup_loc = geo.loc + (rel_loc - geo_rect.loc);
+                                                let popup_rect = Rectangle::new(popup_loc, (popup_w, popup_h).into()).to_physical_precise_round(1.0);
+                                                blur.render_blur(gl, screen_size, popup_rect, 14.0);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Desenfocar menús contextuales y popups de ventanas de aplicaciones
+                            for window in state.space.elements() {
+                                if let Some(wl_surf) = window.wl_surface() {
+                                    if let Some(win_loc) = state.space.element_location(window) {
+                                        for (popup, rel_loc) in smithay::desktop::PopupManager::popups_for_surface(&wl_surf) {
+                                            let geo_rect = popup.geometry();
+                                            let (popup_w, popup_h) = if geo_rect.size.w > 0 && geo_rect.size.h > 0 {
+                                                (geo_rect.size.w, geo_rect.size.h)
+                                            } else {
+                                                smithay::wayland::compositor::with_states(popup.wl_surface(), |states| {
+                                                    let data = states.data_map.get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>();
+                                                    if let Some(d) = data {
+                                                        if let Some(dim) = d.lock().unwrap().buffer_size() {
+                                                            (dim.w, dim.h)
+                                                        } else {
+                                                            (0, 0)
+                                                        }
+                                                    } else {
+                                                        (0, 0)
+                                                    }
+                                                })
+                                            };
+                                             if popup_w > 0 && popup_h > 0 {
+                                                let popup_loc = win_loc - output_geo.loc + (rel_loc - geo_rect.loc);
+                                                let popup_rect = Rectangle::new(popup_loc, (popup_w, popup_h).into()).to_physical_precise_round(1.0);
+                                                blur.render_blur(gl, screen_size, popup_rect, 14.0);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+
+                    // 4. Renderizar capas superiores translúcidas (Dock, Top Bar, Popovers)
+                    if !upper_elements.is_empty() {
+                        let _ = draw_render_elements(&mut frame, 1.0, &upper_elements, &[damage]);
+                    }
 
                     // Dibujar overlay translúcido Aero Glass de previsualización al arrastrar cerca del borde
-                    if let Some(preview) = state.snap_preview {
-                        let preview_phys = preview.to_physical_precise_round(1.0);
-                        // Fondo azul translúcido (#0078d4 con 35% de opacidad)
-                        let _ = frame.draw_solid(
-                            preview_phys,
-                            &[Rectangle::from_size(preview_phys.size)],
-                            Color32F::new(0.0, 0.47, 0.83, 0.35),
-                        );
+                    let is_pointer_grabbed = state.seat.get_pointer().map(|p| p.is_grabbed()).unwrap_or(false);
+                    if is_pointer_grabbed {
+                        if let Some(preview) = state.snap_preview {
+                            let preview_phys = preview.to_physical_precise_round(1.0);
+                            // Fondo azul translúcido (#0078d4 con 35% de opacidad)
+                            let _ = frame.draw_solid(
+                                preview_phys,
+                                &[Rectangle::from_size(preview_phys.size)],
+                                Color32F::new(0.0, 0.47, 0.83, 0.35),
+                            );
 
-                        // Borde resaltado azul de 3px
-                        let border_color = Color32F::new(0.38, 0.72, 1.0, 0.85);
-                        let b_thickness = 3;
-                        let b_top = Rectangle::new(preview_phys.loc, (preview_phys.size.w, b_thickness).into());
-                        let b_bottom = Rectangle::new(
-                            (preview_phys.loc.x, preview_phys.loc.y + preview_phys.size.h - b_thickness).into(),
-                            (preview_phys.size.w, b_thickness).into(),
-                        );
-                        let b_left = Rectangle::new(preview_phys.loc, (b_thickness, preview_phys.size.h).into());
-                        let b_right = Rectangle::new(
-                            (preview_phys.loc.x + preview_phys.size.w - b_thickness, preview_phys.loc.y).into(),
-                            (b_thickness, preview_phys.size.h).into(),
-                        );
+                            // Borde resaltado azul de 3px
+                            let border_color = Color32F::new(0.38, 0.72, 1.0, 0.85);
+                            let b_thickness = 3;
+                            let b_top = Rectangle::new(preview_phys.loc, (preview_phys.size.w, b_thickness).into());
+                            let b_bottom = Rectangle::new(
+                                (preview_phys.loc.x, preview_phys.loc.y + preview_phys.size.h - b_thickness).into(),
+                                (preview_phys.size.w, b_thickness).into(),
+                            );
+                            let b_left = Rectangle::new(preview_phys.loc, (b_thickness, preview_phys.size.h).into());
+                            let b_right = Rectangle::new(
+                                (preview_phys.loc.x + preview_phys.size.w - b_thickness, preview_phys.loc.y).into(),
+                                (b_thickness, preview_phys.size.h).into(),
+                            );
 
-                        let _ = frame.draw_solid(b_top, &[Rectangle::from_size(b_top.size)], border_color);
-                        let _ = frame.draw_solid(b_bottom, &[Rectangle::from_size(b_bottom.size)], border_color);
-                        let _ = frame.draw_solid(b_left, &[Rectangle::from_size(b_left.size)], border_color);
-                        let _ = frame.draw_solid(b_right, &[Rectangle::from_size(b_right.size)], border_color);
+                            let _ = frame.draw_solid(b_top, &[Rectangle::from_size(b_top.size)], border_color);
+                            let _ = frame.draw_solid(b_bottom, &[Rectangle::from_size(b_bottom.size)], border_color);
+                            let _ = frame.draw_solid(b_left, &[Rectangle::from_size(b_left.size)], border_color);
+                            let _ = frame.draw_solid(b_right, &[Rectangle::from_size(b_right.size)], border_color);
+                        }
+                    } else {
+                        state.snap_preview = None;
                     }
 
                     // Renderizado auténtico de Efecto Lámpara de Aladino (Genie Effect / Magic Lamp)
@@ -840,6 +1115,33 @@ pub fn run_winit() -> Result<()> {
                                         );
                                     }
                                 }
+                            }
+                        }
+                    }
+
+                    // 🖥 ESQUINAS SQUIRCLE SUPERELÍPTICAS (n=4.2) DEL ESCRITORIO
+                    if let Some(r) = phys_r {
+                        if let Some(textures) = squircle_corner_cache.get(&r) {
+                            let (w, h) = (size.w, size.h);
+                            let corner_rects = [
+                                Rectangle::new((0, 0).into(), (r, r).into()), // Superior Izquierda
+                                Rectangle::new((w - r, 0).into(), (r, r).into()), // Superior Derecha
+                                Rectangle::new((0, h - r).into(), (r, r).into()), // Inferior Izquierda
+                                Rectangle::new((w - r, h - r).into(), (r, r).into()), // Inferior Derecha
+                            ];
+
+                            for (i, rect) in corner_rects.iter().enumerate() {
+                                let _ = frame.render_texture_from_to(
+                                    &textures[i],
+                                    Rectangle::from_size(textures[i].size()).to_f64(),
+                                    *rect,
+                                    &[Rectangle::from_size(rect.size)],
+                                    &[],
+                                    Transform::Normal,
+                                    1.0,
+                                    None,
+                                    &[],
+                                );
                             }
                         }
                     }

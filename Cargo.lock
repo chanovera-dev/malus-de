@@ -1593,6 +1593,7 @@ dependencies = [
  "wayland-protocols-misc",
  "wayland-protocols-wlr",
  "wayland-server",
+ "xcursor",
  "zbus",
 ]
 
@@ -1681,6 +1682,21 @@ dependencies = [
  "tracing",
  "wayland-protocols-misc",
  "zbus",
+]
+
+[[package]]
+name = "malus-de-settings"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "gdk-pixbuf",
+ "gio",
+ "glib",
+ "gtk4",
+ "libadwaita",
+ "malus-de-common",
+ "tracing",
 ]
 
 [[package]]

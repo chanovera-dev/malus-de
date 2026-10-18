@@ -1,6 +1,8 @@
 pub mod backend;
+pub mod blur;
 pub mod grabs;
 pub mod state;
+pub mod window_corners;
 
 use malus_de_common::logging::init_logging;
 use tracing::info;
@@ -8,6 +10,9 @@ use tracing::info;
 fn main() -> anyhow::Result<()> {
     init_logging("malus_de_compositor");
     info!("Iniciando Malus DE Compositor (Smithay Wayland)...");
+
+    // Limpiar sockets huérfanos de sesiones Wayland previas antes de inicializar backends
+    malus_de_common::wayland::cleanup_stale_wayland_sockets();
 
     if let Err(e) = malus_de_common::config::setup_isolated_session_environment() {
         tracing::warn!("Aviso al inicializar entorno aislado de configuración: {:?}", e);

@@ -29,6 +29,7 @@ else
     exit 1
 fi
 echo "📍 Utilizando binarios desde: $BIN_DIR"
+export PATH="$BIN_DIR:$PATH"
 
 # ------------------------------------------------------------------------------
 # Configuración del entorno de sesión aislado (macOS UX sin afectar GNOME)
@@ -48,6 +49,8 @@ export QT_QPA_PLATFORM="wayland"
 export SDL_VIDEODRIVER="wayland"
 export CLUTTER_BACKEND="wayland"
 export MOZ_ENABLE_WAYLAND=1
+export XCURSOR_THEME="macOS"
+export XCURSOR_SIZE=24
 
 # Hook dinámico de layout de ventanas (Nautilus macOS style)
 if [ -f "$HOME/.config/malus-de/lib/libmalus_gtk_layout.so" ]; then
@@ -62,7 +65,9 @@ cat << 'EOF' > "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile"
 button-layout='close,minimize,maximize:'
 
 [org/gnome/desktop/interface]
-color-scheme='prefer-dark'
+color-scheme='prefer-light'
+cursor-theme='macOS'
+cursor-size=24
 
 [org/gnome/settings-daemon/plugins/xsettings]
 overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
@@ -71,13 +76,17 @@ EOF
 cat << 'EOF' > "$XDG_CONFIG_HOME/gtk-3.0/settings.ini"
 [Settings]
 gtk-decoration-layout=close,minimize,maximize:
-gtk-application-prefer-dark-theme=1
+gtk-application-prefer-dark-theme=0
+gtk-cursor-theme-name=macOS
+gtk-cursor-theme-size=24
 EOF
 
 cat << 'EOF' > "$XDG_CONFIG_HOME/gtk-4.0/settings.ini"
 [Settings]
 gtk-decoration-layout=close,minimize,maximize:
-gtk-application-prefer-dark-theme=1
+gtk-application-prefer-dark-theme=0
+gtk-cursor-theme-name=macOS
+gtk-cursor-theme-size=24
 EOF
 
 # Sincronizar variables iniciales con el daemon de activación D-Bus
@@ -92,6 +101,26 @@ pkill -f malus-de-spotlight 2>/dev/null || true
 pkill -f malus-de-wallpaper 2>/dev/null || true
 pkill -f malus-de-notifications 2>/dev/null || true
 pkill -f malus-de-link 2>/dev/null || true
+
+# Limpiar sockets huérfanos previos para evitar que el bucle de espera detecte un socket muerto
+python3 -c "
+import os, glob, socket
+uid = os.getuid()
+for s in glob.glob(f'/run/user/{uid}/wayland-[0-9]*'):
+    if not s.endswith('.lock'):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.connect(s)
+            sock.close()
+        except Exception:
+            try:
+                os.remove(s)
+                lock = s + '.lock'
+                if os.path.exists(lock):
+                    os.remove(lock)
+            except Exception:
+                pass
+" 2>/dev/null || true
 
 # ------------------------------------------------------------------------------
 # 1. Iniciar Compositor Wayland Smithay (DRM nativo o Winit anidado)
@@ -108,17 +137,19 @@ fi
 COMPOSITOR_PID=$!
 echo "🚀 Compositor iniciado con PID: $COMPOSITOR_PID"
 
-# Esperar a que el socket Wayland esté disponible en /run/user/$UID/
+# Esperar a que el socket Wayland esté disponible y respondiendo activamente a conexiones
 SOCKET_FOUND=""
-for i in {1..30}; do
+for i in {1..60}; do
     if [ ! -d "/proc/$COMPOSITOR_PID" ]; then
         echo "❌ Error: El compositor terminó inesperadamente."
         exit 1
     fi
     for s in /run/user/"$UID"/wayland-[0-9]*; do
         if [ -S "$s" ]; then
-            SOCKET_FOUND="$(basename "$s")"
-            break 2
+            if python3 -c "import socket; s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect('$s'); s.close()" 2>/dev/null; then
+                SOCKET_FOUND="$(basename "$s")"
+                break 2
+            fi
         fi
     done
     sleep 0.1

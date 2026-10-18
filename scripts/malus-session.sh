@@ -19,7 +19,7 @@ cat << 'EOF' > "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile"
 button-layout='close,minimize,maximize:'
 
 [org/gnome/desktop/interface]
-color-scheme='prefer-dark'
+color-scheme='prefer-light'
 
 [org/gnome/settings-daemon/plugins/xsettings]
 overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
@@ -28,13 +28,13 @@ EOF
 cat << 'EOF' > "$XDG_CONFIG_HOME/gtk-3.0/settings.ini"
 [Settings]
 gtk-decoration-layout=close,minimize,maximize:
-gtk-application-prefer-dark-theme=1
+gtk-application-prefer-dark-theme=0
 EOF
 
 cat << 'EOF' > "$XDG_CONFIG_HOME/gtk-4.0/settings.ini"
 [Settings]
 gtk-decoration-layout=close,minimize,maximize:
-gtk-application-prefer-dark-theme=1
+gtk-application-prefer-dark-theme=0
 EOF
 
 # Aislar el bus de sesión D-Bus para evitar que apps de instancia única (ej. Nautilus) se redirijan a la sesión GNOME anfitriona

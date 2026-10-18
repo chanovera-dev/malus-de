@@ -18,6 +18,10 @@ pub fn create_status_tray_widget() -> GtkBox {
         .spacing(4)
         .build();
 
+    // 0. Indicador y selector rápido de Teclado (LAT / ES / US)
+    let kb_widget = create_keyboard_tray_button();
+    tray.append(&kb_widget);
+
     // 1. Malus Link / AirDrop Menu Extra
     let link_widget = create_link_tray_button();
     tray.append(&link_widget);
@@ -45,6 +49,59 @@ pub fn create_status_tray_widget() -> GtkBox {
     tray
 }
 
+fn create_keyboard_tray_button() -> Button {
+    let input_cfg = malus_de_common::config::InputConfig::load();
+    let btn = Button::builder()
+        .css_classes(["network-pill", "topbar-btn"])
+        .label(&format!("⌨ {}", input_cfg.layout_short_badge()))
+        .tooltip_text(&format!(
+            "Teclado: {} (Clic para alternar LATAM / ES / US)",
+            input_cfg.layout_display_name()
+        ))
+        .has_frame(false)
+        .build();
+
+    let btn_click = btn.clone();
+    btn.connect_clicked(move |_| {
+        let mut cfg = malus_de_common::config::InputConfig::load();
+        let next_layout = match cfg.keyboard_layout.as_str() {
+            "latam" => "es",
+            "es" => "us",
+            _ => "latam",
+        };
+        cfg.keyboard_layout = next_layout.to_string();
+        cfg.keyboard_variant = String::new();
+        let _ = cfg.save();
+        let _ = malus_de_common::ipc::IpcClient::send_command(
+            malus_de_common::ipc::IpcMessage::SetKeyboardLayout {
+                layout: next_layout.to_string(),
+                variant: String::new(),
+            },
+        );
+        btn_click.set_label(&format!("⌨ {}", cfg.layout_short_badge()));
+        btn_click.set_tooltip_text(Some(&format!(
+            "Teclado: {} (Clic para alternar LATAM / ES / US)",
+            cfg.layout_display_name()
+        )));
+    });
+
+    let btn_timer = btn.clone();
+    glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
+        let cfg = malus_de_common::config::InputConfig::load();
+        let expected = format!("⌨ {}", cfg.layout_short_badge());
+        if btn_timer.label().as_deref() != Some(expected.as_str()) {
+            btn_timer.set_label(&expected);
+            btn_timer.set_tooltip_text(Some(&format!(
+                "Teclado: {} (Clic para alternar LATAM / ES / US)",
+                cfg.layout_display_name()
+            )));
+        }
+        glib::ControlFlow::Continue
+    });
+
+    btn
+}
+
 // ==========================================
 // 1. Wi-Fi Menu Extra
 // ==========================================
@@ -67,6 +124,7 @@ fn create_wifi_tray_button() -> MenuButton {
         .halign(Align::End)
         .build();
     popover.set_offset(0, 4);
+    crate::ui::theme::register_popover(&popover);
 
     let popover_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
@@ -397,6 +455,7 @@ fn create_bluetooth_tray_button() -> MenuButton {
         .halign(Align::End)
         .build();
     popover.set_offset(0, 4);
+    crate::ui::theme::register_popover(&popover);
 
     let popover_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
@@ -701,6 +760,7 @@ fn create_volume_tray_button() -> MenuButton {
         .halign(Align::End)
         .build();
     popover.set_offset(0, 4);
+    crate::ui::theme::register_popover(&popover);
 
     let popover_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
@@ -970,6 +1030,7 @@ fn create_link_tray_button() -> MenuButton {
         .halign(Align::End)
         .build();
     popover.set_offset(0, 4);
+    crate::ui::theme::register_popover(&popover);
 
     let popover_box = GtkBox::builder()
         .orientation(Orientation::Vertical)

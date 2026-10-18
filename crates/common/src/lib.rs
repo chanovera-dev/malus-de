@@ -7,3 +7,5 @@ pub mod config;
 pub mod ipc;
 pub mod theme;
 pub mod logging;
+pub mod wayland;
+

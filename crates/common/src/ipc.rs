@@ -43,6 +43,10 @@ pub enum IpcMessage {
     },
     /// Ocultar y descartar el selector visual de aplicaciones
     HideAppSwitcher,
+    /// Conmutar a una ventana específica por su identificador
+    SwitchToWindow {
+        window_id: u64,
+    },
     /// Activar o restaurar ventana de una aplicación desde el Dock o lanzador
     ActivateApp {
         app_id: String,
@@ -140,6 +144,20 @@ pub enum IpcMessage {
     },
     /// Notificación o solicitud de recarga de configuración del Dock (dock.toml)
     ReloadDockConfig,
+    /// Solicitud de recarga en caliente de la configuración de pantallas y escalado (monitors.toml)
+    ReloadDisplaysConfig,
+    /// Solicitud de cambio en vivo de la distribución de teclado XKB (ej. "latam", "es", "us")
+    SetKeyboardLayout {
+        layout: String,
+        #[serde(default)]
+        variant: String,
+    },
+    /// Notificación de cambio activo de la distribución de teclado
+    KeyboardLayoutChanged {
+        layout: String,
+        #[serde(default)]
+        variant: String,
+    },
 }
 
 /// Obtiene la ruta canónica del socket IPC Unix de Malus DE
@@ -271,6 +289,14 @@ pub fn send_ipc_message(msg: &IpcMessage) -> std::io::Result<()> {
     let json = serde_json::to_string(msg)?;
     writeln!(stream, "{}", json)?;
     Ok(())
+}
+
+pub struct IpcClient;
+
+impl IpcClient {
+    pub fn send_command(msg: IpcMessage) -> std::io::Result<()> {
+        send_ipc_message(&msg)
+    }
 }
 
 #[cfg(test)]

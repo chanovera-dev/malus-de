@@ -8,6 +8,7 @@ use smithay::{
     },
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge,
     utils::{Logical, Point, Rectangle, Size},
+    wayland::seat::WaylandFocus,
 };
 
 use crate::state::MalusState;
@@ -302,21 +303,34 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
         data.space
             .map_element(self.window.clone(), new_location.to_i32_round(), true);
 
-        // Actualizar overlay de previsualización Aero Snap en tiempo real
         let cur_loc = event.location;
-        let preview = data.space.outputs().next().and_then(|output| {
-            let (zone, output_geo) = {
-                let layer_map = smithay::desktop::layer_map_for_output(output);
-                (layer_map.non_exclusive_zone(), data.space.output_geometry(output).unwrap_or_default())
-            };
-            let usable_zone = if zone.size.w > 0 && zone.size.h > 0 {
-                zone
-            } else {
-                Rectangle::new(
-                    (0, 32).into(),
-                    (output_geo.size.w, output_geo.size.h - 32).into(),
-                )
-            };
+        let active_output = data
+            .space
+            .outputs()
+            .find(|o| {
+                data.space
+                    .output_geometry(o)
+                    .map(|g| g.to_f64().contains(cur_loc))
+                    .unwrap_or(false)
+            })
+            .or_else(|| data.space.outputs().next())
+            .cloned();
+
+        if let Some(ref output) = active_output {
+            if let Some(wl_surf) = self.window.wl_surface() {
+                let scale = output.current_scale().fractional_scale();
+                smithay::wayland::compositor::with_states(&wl_surf, |states| {
+                    smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
+                        fs.set_preferred_scale(scale);
+                    });
+                });
+            }
+        }
+
+        // Actualizar overlay de previsualización Aero Snap en tiempo real
+        let preview = active_output.and_then(|output| {
+            let output_geo = data.space.output_geometry(&output).unwrap_or_default();
+            let usable_zone = data.usable_zone_for_output(&output);
 
             evaluate_snap(cur_loc, output_geo, usable_zone)
                 .and_then(|mode| preview_for_snap(mode, usable_zone))
@@ -359,19 +373,22 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
                 cur_loc, win_loc, win_geo.size, outputs_count
             );
 
-            // Detección de Aero Snap al soltar la ventana en los bordes de la pantalla
-            let snap_action = data.space.outputs().next().and_then(|output| {
-                let layer_map = smithay::desktop::layer_map_for_output(output);
-                let zone = layer_map.non_exclusive_zone();
-                let output_geo = data.space.output_geometry(output).unwrap_or_default();
-                let usable_zone = if zone.size.w > 0 && zone.size.h > 0 {
-                    zone
-                } else {
-                    Rectangle::new(
-                        (0, 32).into(),
-                        (output_geo.size.w, output_geo.size.h - 32).into(),
-                    )
-                };
+            // Detección de Aero Snap al soltar la ventana en los bordes de la pantalla bajo el cursor
+            let target_output = data
+                .space
+                .outputs()
+                .find(|o| {
+                    data.space
+                        .output_geometry(o)
+                        .map(|g| g.to_f64().contains(cur_loc))
+                        .unwrap_or(false)
+                })
+                .or_else(|| data.space.outputs().next())
+                .cloned();
+
+            let snap_action = target_output.and_then(|output| {
+                let output_geo = data.space.output_geometry(&output).unwrap_or_default();
+                let usable_zone = data.usable_zone_for_output(&output);
 
                 let mode = evaluate_snap(cur_loc, output_geo, usable_zone);
                 tracing::info!(
@@ -513,7 +530,7 @@ pub fn evaluate_snap(
 
     let is_left = cur_loc.x <= output_geo.loc.x as f64 + edge_margin;
     let is_right = cur_loc.x >= (output_geo.loc.x + output_geo.size.w) as f64 - edge_margin;
-    let is_top = cur_loc.y <= (output_geo.loc.y + usable_zone.loc.y) as f64 + edge_margin;
+    let is_top = cur_loc.y <= usable_zone.loc.y as f64 + edge_margin;
 
     if is_left {
         Some(crate::state::SnapMode::LeftHalf)

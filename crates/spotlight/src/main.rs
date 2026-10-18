@@ -331,17 +331,12 @@ fn build_spotlight_ui(app: &Application) {
                             if let Ok(wayland_disp) = std::env::var("WAYLAND_DISPLAY") {
                                 command.env("WAYLAND_DISPLAY", wayland_disp);
                             }
+                            command.env("XDG_CURRENT_DESKTOP", "Malus");
                             command.env("GDK_BACKEND", "wayland");
-                            command.env("GSK_RENDERER", "cairo");
                             if let Ok(xdg_rt) = std::env::var("XDG_RUNTIME_DIR") {
                                 command.env("XDG_RUNTIME_DIR", xdg_rt);
                             }
-                            if let Ok(cfg_home) = std::env::var("XDG_CONFIG_HOME") {
-                                command.env("XDG_CONFIG_HOME", cfg_home);
-                            } else if let Ok(home) = std::env::var("HOME") {
-                                command.env("XDG_CONFIG_HOME", format!("{}/.config/malus-de", home));
-                            }
-                            command.env("GSETTINGS_BACKEND", "keyfile");
+                            command.env_remove("LD_PRELOAD");
 
                             if let Ok(mut child) = command.spawn() {
                                 std::thread::spawn(move || {

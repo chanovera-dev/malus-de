@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::os::unix::io::OwnedFd;
 use smithay::{
     delegate_compositor, delegate_data_device, delegate_fractional_scale, delegate_layer_shell,
-    delegate_output, delegate_primary_selection, delegate_seat, delegate_shm, delegate_xdg_shell,
+    delegate_output, delegate_primary_selection, delegate_seat, delegate_shm, delegate_viewporter,
+    delegate_xdg_decoration, delegate_xdg_shell,
     desktop::{
         find_popup_root_surface, layer_map_for_output, PopupKind, PopupManager, Space,
     },
@@ -26,9 +27,12 @@ use smithay::{
         output::{OutputHandler, OutputManagerState},
         selection::{
             data_device::{
-                ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
+                set_data_device_focus, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState,
+                ServerDndGrabHandler,
             },
-            primary_selection::{PrimarySelectionHandler, PrimarySelectionState},
+            primary_selection::{
+                set_primary_focus, PrimarySelectionHandler, PrimarySelectionState,
+            },
             SelectionHandler,
         },
         shell::{
@@ -41,6 +45,7 @@ use smithay::{
         },
         seat::WaylandFocus,
         shm::{ShmHandler, ShmState},
+        viewporter::ViewporterState,
     },
 };
 
@@ -81,8 +86,10 @@ pub struct MalusState {
     pub display_handle: DisplayHandle,
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
+    pub xdg_decoration_state: smithay::wayland::shell::xdg::decoration::XdgDecorationState,
     pub layer_shell_state: WlrLayerShellState,
     pub fractional_scale_manager_state: FractionalScaleManagerState,
+    pub viewporter_state: ViewporterState,
     pub shm_state: ShmState,
     pub seat_state: SeatState<MalusState>,
     pub data_device_state: DataDeviceState,
@@ -104,6 +111,7 @@ pub struct MalusState {
     pub ipc_broadcaster: IpcBroadcaster,
     pub app_switcher: AppSwitcherState,
     pub cursor_status: smithay::input::pointer::CursorImageStatus,
+    pub pending_displays_reload: bool,
 }
 
 pub fn guess_icon_name(app_id: &str, title: &str) -> String {
@@ -155,8 +163,10 @@ impl MalusState {
         let dh = display.handle();
         let compositor_state = CompositorState::new::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
+        let xdg_decoration_state = smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<Self>(&dh);
         let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
         let fractional_scale_manager_state = FractionalScaleManagerState::new::<Self>(&dh);
+        let viewporter_state = ViewporterState::new::<Self>(&dh);
         let shm_state = ShmState::new::<Self>(&dh, vec![]);
         let mut seat_state = SeatState::new();
         let seat = seat_state.new_wl_seat(&dh, "malus-seat-0");
@@ -173,8 +183,10 @@ impl MalusState {
             display_handle: dh,
             compositor_state,
             xdg_shell_state,
+            xdg_decoration_state,
             layer_shell_state,
             fractional_scale_manager_state,
+            viewporter_state,
             shm_state,
             seat_state,
             data_device_state,
@@ -196,6 +208,7 @@ impl MalusState {
             ipc_broadcaster,
             app_switcher: AppSwitcherState::default(),
             cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
+            pending_displays_reload: false,
         }
     }
 
@@ -234,21 +247,25 @@ impl MalusState {
         for window in self.space.elements() {
             if let Some(surface) = window.wl_surface() {
                 let (app_id, title) = toplevel_info(&surface);
-                if let Some(id) = app_id {
-                    apps.push(id);
-                }
-                if let Some(t) = title {
-                    apps.push(t);
+                let app = app_id
+                    .filter(|id| !id.trim().is_empty())
+                    .or_else(|| title.filter(|t| !t.trim().is_empty()));
+                if let Some(app_name) = app {
+                    if !apps.contains(&app_name) {
+                        apps.push(app_name);
+                    }
                 }
             }
         }
         for (surface, _) in &self.minimized_windows {
             let (app_id, title) = toplevel_info(surface);
-            if let Some(id) = app_id {
-                apps.push(id);
-            }
-            if let Some(t) = title {
-                apps.push(t);
+            let app = app_id
+                .filter(|id| !id.trim().is_empty())
+                .or_else(|| title.filter(|t| !t.trim().is_empty()));
+            if let Some(app_name) = app {
+                if !apps.contains(&app_name) {
+                    apps.push(app_name);
+                }
             }
         }
         self.ipc_broadcaster.broadcast(&IpcMessage::RunningAppsChanged { running_apps: apps });
@@ -290,10 +307,12 @@ impl MalusState {
 
     pub fn dock_surface_geometry(&self) -> Option<(Rectangle<i32, Logical>, Output)> {
         for output in self.space.outputs() {
+            let output_geo = self.space.output_geometry(output).unwrap_or_default();
             let layer_map = layer_map_for_output(output);
             for layer in layer_map.layers() {
                 if layer.namespace() == "malus-dock" {
-                    if let Some(geo) = layer_map.layer_geometry(layer) {
+                    if let Some(mut geo) = layer_map.layer_geometry(layer) {
+                        geo.loc += output_geo.loc;
                         return Some((geo, output.clone()));
                     }
                 }
@@ -531,9 +550,69 @@ impl MalusState {
                     tracing::info!("📥 IPC CloseActiveWindow recibido");
                     self.close_active_window();
                 }
+                IpcMessage::ReloadDisplaysConfig => {
+                    tracing::info!("📥 IPC ReloadDisplaysConfig recibido — marcando recarga inmediata de pantallas");
+                    self.pending_displays_reload = true;
+                    self.ipc_broadcaster.broadcast(&IpcMessage::ReloadDisplaysConfig);
+                }
+                IpcMessage::SetKeyboardLayout { layout, variant } => {
+                    tracing::info!("📥 IPC SetKeyboardLayout recibido: layout='{}', variant='{}'", layout, variant);
+                    self.apply_keyboard_layout(&layout, &variant);
+                }
+                IpcMessage::SwitchToWindow { window_id } => {
+                    tracing::info!("📥 IPC SwitchToWindow recibido para: {}", window_id);
+                    self.app_switcher.is_active = false;
+                    self.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
+                    self.switch_to_window(window_id);
+                }
+                IpcMessage::HideAppSwitcher => {
+                    tracing::info!("📥 IPC HideAppSwitcher recibido");
+                    self.app_switcher.is_active = false;
+                    self.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
+                }
+                IpcMessage::ReloadDockConfig => {
+                    tracing::info!("📥 IPC ReloadDockConfig recibido — retransmitiendo a clientes shell");
+                    self.ipc_broadcaster.broadcast(&IpcMessage::ReloadDockConfig);
+                }
                 _ => {}
             }
         }
+    }
+
+    /// Cambia la distribución de teclado XKB en vivo para toda la sesión Wayland y persiste en input.toml
+    pub fn apply_keyboard_layout(&mut self, layout: &str, variant: &str) {
+        let mut input_cfg = malus_de_common::config::InputConfig::load();
+        input_cfg.keyboard_layout = layout.to_string();
+        input_cfg.keyboard_variant = variant.to_string();
+        let _ = input_cfg.save();
+
+        if let Some(kb) = self.seat.get_keyboard() {
+            let xkb_config = smithay::input::keyboard::XkbConfig {
+                rules: "",
+                model: &input_cfg.keyboard_model,
+                layout: &input_cfg.keyboard_layout,
+                variant: &input_cfg.keyboard_variant,
+                options: input_cfg.keyboard_options.clone(),
+            };
+            match kb.set_xkb_config(self, xkb_config) {
+                Ok(()) => {
+                    tracing::info!(
+                        "⌨️ Distribución de teclado XKB aplicada en vivo: layout='{}' ({}), variant='{}'",
+                        input_cfg.keyboard_layout,
+                        input_cfg.layout_display_name(),
+                        input_cfg.keyboard_variant
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("❌ Error aplicando distribución XKB '{}': {:?}", layout, e);
+                }
+            }
+        }
+
+        self.ipc_broadcaster.broadcast(&IpcMessage::KeyboardLayoutChanged {
+            layout: input_cfg.keyboard_layout,
+            variant: input_cfg.keyboard_variant,
+        });
     }
 
     pub fn get_active_window(&self) -> Option<smithay::desktop::Window> {
@@ -774,6 +853,33 @@ delegate_output!(MalusState);
 delegate_data_device!(MalusState);
 delegate_primary_selection!(MalusState);
 delegate_fractional_scale!(MalusState);
+delegate_viewporter!(MalusState);
+delegate_xdg_decoration!(MalusState);
+
+impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for MalusState {
+    fn new_decoration(&mut self, toplevel: smithay::wayland::shell::xdg::ToplevelSurface) {
+        toplevel.with_pending_state(|state| {
+            state.decoration_mode = Some(smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode::ClientSide);
+        });
+        toplevel.send_configure();
+    }
+    fn request_mode(
+        &mut self,
+        toplevel: smithay::wayland::shell::xdg::ToplevelSurface,
+        mode: smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
+    ) {
+        toplevel.with_pending_state(|state| {
+            state.decoration_mode = Some(mode);
+        });
+        toplevel.send_configure();
+    }
+    fn unset_mode(&mut self, toplevel: smithay::wayland::shell::xdg::ToplevelSurface) {
+        toplevel.with_pending_state(|state| {
+            state.decoration_mode = Some(smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode::ClientSide);
+        });
+        toplevel.send_configure();
+    }
+}
 
 impl FractionalScaleHandler for MalusState {
     fn new_fractional_scale(&mut self, surface: WlSurface) {
@@ -789,25 +895,59 @@ impl FractionalScaleHandler for MalusState {
 impl MalusState {
     /// Determina la escala fraccionaria preferida para una superficie según el monitor en el que reside
     pub fn preferred_scale_for_surface(&self, surface: &WlSurface) -> f64 {
-        for window in self.space.elements() {
-            if window.toplevel().map(|t| t.wl_surface() == surface).unwrap_or(false) {
-                if let Some(output) = self.space.outputs_for_element(window).first() {
-                    return match output.current_scale() {
-                        smithay::output::Scale::Fractional(f) => f,
-                        smithay::output::Scale::Integer(i) => i as f64,
-                        _ => 1.0,
-                    };
+        if let Some(window) = self.window_for_surface(surface) {
+            if let Some(win_loc) = self.space.element_location(&window) {
+                let win_geo = window.geometry();
+                let center = Point::<i32, Logical>::from((
+                    win_loc.x + (win_geo.size.w.max(1) / 2),
+                    win_loc.y + (win_geo.size.h.max(1) / 2),
+                ));
+                for output in self.space.outputs() {
+                    if let Some(geo) = self.space.output_geometry(output) {
+                        if geo.contains(center) {
+                            return output.current_scale().fractional_scale();
+                        }
+                    }
+                }
+                for output in self.space.outputs() {
+                    if let Some(geo) = self.space.output_geometry(output) {
+                        if geo.contains(win_loc) {
+                            return output.current_scale().fractional_scale();
+                        }
+                    }
                 }
             }
-        }
-        if let Some(output) = self.space.outputs().next() {
-            match output.current_scale() {
-                smithay::output::Scale::Fractional(f) => f,
-                smithay::output::Scale::Integer(i) => i as f64,
-                _ => 1.0,
+            if let Some(output) = self.space.outputs_for_element(&window).first() {
+                return output.current_scale().fractional_scale();
             }
+        }
+
+        for output in self.space.outputs() {
+            let map = smithay::desktop::layer_map_for_output(output);
+            if map.layer_for_surface(surface, smithay::desktop::WindowSurfaceType::all()).is_some() {
+                return output.current_scale().fractional_scale();
+            }
+        }
+
+        if let Some(output) = self.space.outputs().next() {
+            output.current_scale().fractional_scale()
         } else {
             1.0
+        }
+    }
+
+    /// Calcula la zona utilizable global (en coordenadas de Space) para un monitor dado
+    pub fn usable_zone_for_output(&self, output: &Output) -> Rectangle<i32, Logical> {
+        let output_geo = self.space.output_geometry(output).unwrap_or_default();
+        let layer_map = smithay::desktop::layer_map_for_output(output);
+        let zone = layer_map.non_exclusive_zone();
+        if zone.size.w > 0 && zone.size.h > 0 {
+            Rectangle::new(output_geo.loc + zone.loc, zone.size)
+        } else {
+            Rectangle::new(
+                (output_geo.loc.x, output_geo.loc.y + 36).into(),
+                (output_geo.size.w, (output_geo.size.h - 36).max(100)).into(),
+            )
         }
     }
 }
@@ -868,15 +1008,14 @@ impl CompositorHandler for MalusState {
                 let mut map = smithay::desktop::layer_map_for_output(&output);
                 map.arrange();
 
-                let initial_configure_sent = smithay::wayland::compositor::with_states(surface, |states| {
-                    states
-                        .data_map
-                        .get::<smithay::wayland::shell::wlr_layer::LayerSurfaceData>()
-                        .map(|d| d.lock().unwrap().initial_configure_sent)
-                        .unwrap_or(false)
-                });
-
-                if let Some(layer) = map.layer_for_surface(surface, smithay::desktop::WindowSurfaceType::all()) {
+                if let Some(layer) = map.layer_for_surface(surface, smithay::desktop::WindowSurfaceType::TOPLEVEL) {
+                    let initial_configure_sent = smithay::wayland::compositor::with_states(layer.wl_surface(), |states| {
+                        states
+                            .data_map
+                            .get::<smithay::wayland::shell::wlr_layer::LayerSurfaceData>()
+                            .map(|d| d.lock().unwrap().initial_configure_sent)
+                            .unwrap_or(false)
+                    });
                     if !initial_configure_sent {
                         tracing::info!("📤 Enviando initial configure a layer surface");
                         layer.layer_surface().send_configure();
@@ -918,7 +1057,32 @@ impl SeatHandler for MalusState {
         &mut self.seat_state
     }
 
-    fn focus_changed(&mut self, _seat: &Seat<Self>, _focused: Option<&WlSurface>) {}
+    fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
+        let dh = &self.display_handle;
+        let client = focused.and_then(|s| dh.get_client(smithay::reexports::wayland_server::Resource::id(s)).ok());
+        set_data_device_focus(dh, seat, client.clone());
+        set_primary_focus(dh, seat, client);
+
+        if focused.is_none() {
+            self.cursor_status = smithay::input::pointer::CursorImageStatus::default_named();
+        }
+
+        // Actualizar el estado Activated de todas las ventanas para sincronizar clientes Wayland (Brave, Chrome, Electron, etc.)
+        for win in self.space.elements() {
+            let is_focused = focused.map(|s| win.wl_surface().as_deref() == Some(s)).unwrap_or(false);
+            win.set_activated(is_focused);
+            if let Some(toplevel) = win.toplevel() {
+                toplevel.with_pending_state(|state| {
+                    if is_focused {
+                        state.states.set(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated);
+                    } else {
+                        state.states.unset(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated);
+                    }
+                });
+                toplevel.send_configure();
+            }
+        }
+    }
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: smithay::input::pointer::CursorImageStatus) {
         self.cursor_status = image;
     }
@@ -955,10 +1119,45 @@ impl XdgShellHandler for MalusState {
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         tracing::info!("✨ Nueva ventana XDG Toplevel recibida y mapeada en Space!");
+        let target_output = self
+            .seat
+            .get_pointer()
+            .map(|p| p.current_location())
+            .and_then(|loc| {
+                self.space
+                    .outputs()
+                    .find(|o| {
+                        self.space
+                            .output_geometry(o)
+                            .map(|g| g.to_f64().contains(loc))
+                            .unwrap_or(false)
+                    })
+                    .cloned()
+            })
+            .or_else(|| self.space.outputs().next().cloned());
+
+        let spawn_loc = if let Some(ref output) = target_output {
+            output.enter(surface.wl_surface());
+            let scale = output.current_scale().fractional_scale();
+            smithay::wayland::compositor::with_states(surface.wl_surface(), |states| {
+                with_fractional_scale(states, |fractional_scale| {
+                    fractional_scale.set_preferred_scale(scale);
+                });
+            });
+            let geo = self.space.output_geometry(output).unwrap_or_default();
+            let offset = ((self.space.elements().count() % 6) as i32) * 28;
+            (geo.loc.x + 80 + offset, geo.loc.y + 60 + offset)
+        } else {
+            (80, 60)
+        };
+
         let window = smithay::desktop::Window::new_wayland_window(surface.clone());
         window.set_activated(true);
+        surface.with_pending_state(|state| {
+            state.states.set(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated);
+        });
         surface.send_configure();
-        self.space.map_element(window, (50, 50), true);
+        self.space.map_element(window, spawn_loc, true);
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
         if let Some(kb) = self.seat.get_keyboard() {
             kb.set_focus(self, Some(surface.wl_surface().clone()), serial);
@@ -1116,18 +1315,15 @@ impl XdgShellHandler for MalusState {
     fn maximize_request(&mut self, surface: ToplevelSurface) {
         tracing::info!("🪟 [XdgShell] maximize_request recibido del cliente");
         let Some(window) = self.window_for_surface(surface.wl_surface()) else { return };
-        let usable_zone = self.space.outputs().next().map(|output| {
-            let layer_map = smithay::desktop::layer_map_for_output(output);
-            let zone = layer_map.non_exclusive_zone();
-            let output_geo = self.space.output_geometry(output).unwrap_or_default();
-            if zone.size.w > 0 && zone.size.h > 0 {
-                zone
-            } else {
-                Rectangle::new((0, 32).into(), (output_geo.size.w, output_geo.size.h - 32).into())
-            }
-        });
+        let output = self
+            .space
+            .outputs_for_element(&window)
+            .into_iter()
+            .next()
+            .or_else(|| self.space.outputs().next().cloned());
 
-        if let Some(usable_zone) = usable_zone {
+        if let Some(output) = output {
+            let usable_zone = self.usable_zone_for_output(&output);
             snap_window(self, &window, SnapMode::Maximize, usable_zone);
         }
     }
@@ -1136,18 +1332,15 @@ impl XdgShellHandler for MalusState {
         tracing::info!("🪟 [XdgShell] unmaximize_request recibido del cliente");
         let surf = surface.wl_surface();
         let Some(window) = self.window_for_surface(surf) else { return };
-        let usable_zone = self.space.outputs().next().map(|output| {
-            let layer_map = smithay::desktop::layer_map_for_output(output);
-            let zone = layer_map.non_exclusive_zone();
-            let output_geo = self.space.output_geometry(output).unwrap_or_default();
-            if zone.size.w > 0 && zone.size.h > 0 {
-                zone
-            } else {
-                Rectangle::new((0, 32).into(), (output_geo.size.w, output_geo.size.h - 32).into())
-            }
-        });
+        let output = self
+            .space
+            .outputs_for_element(&window)
+            .into_iter()
+            .next()
+            .or_else(|| self.space.outputs().next().cloned());
 
-        if let Some(usable_zone) = usable_zone {
+        if let Some(output) = output {
+            let usable_zone = self.usable_zone_for_output(&output);
             snap_window(self, &window, SnapMode::CenterRestore, usable_zone);
         }
     }
@@ -1253,7 +1446,7 @@ impl WlrLayerShellHandler for MalusState {
         tracing::info!("✨ Nueva Layer Surface recibida: namespace={}", namespace);
         if namespace == "malus-top-bar" {
             surface.with_pending_state(|state| {
-                state.size = Some((0, 32).into());
+                state.size = Some((0, 36).into());
             });
         }
         let output = output
@@ -1262,9 +1455,17 @@ impl WlrLayerShellHandler for MalusState {
             .or_else(|| self.space.outputs().next().cloned());
 
         if let Some(output) = output {
+            output.enter(surface.wl_surface());
+            let scale = output.current_scale().fractional_scale();
+            smithay::wayland::compositor::with_states(surface.wl_surface(), |states| {
+                with_fractional_scale(states, |fractional_scale| {
+                    fractional_scale.set_preferred_scale(scale);
+                });
+            });
             let desktop_surface = smithay::desktop::LayerSurface::new(surface, namespace);
             let mut map = layer_map_for_output(&output);
             let _ = map.map_layer(&desktop_surface);
+            map.arrange();
         }
     }
 

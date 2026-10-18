@@ -95,10 +95,15 @@ graph TD
        - **Tarjeta Deslizadora de Sonido:**
          - Control de volumen interactivo en tiempo real conectado a PipeWire vía `wpctl` y servicio asíncrono.
          - Botón de silencio con cambio automático de icono según nivel de volumen.
-       - **Tarjeta Deslizadora de Pantalla y Enlace Físico 1:1 (TrueSize Link):**
-         - Deslizador maestro de escala (100% a 250%).
-         - Botón de enlace `🔗 1:1` / `🔓 Libre` para vincular matemáticamente ambas pantallas según su densidad física de píxeles (PPI).
-         - Subtítulo en tiempo real con las escalas calculadas para los monitores físicos (ej. `LG 27": 166.7% · Mi 24": 187.5%`).
+       - **Tarjeta Deslizadora de Pantalla, Disposición y Enlace Físico 1:1 (TrueSize Link):**
+         - Deslizador rápido de brillo y deslizador de escala maestra/primaria (100% a 250%).
+         - Botón de enlace `🔗 TrueSize 1:1` / `🔓 Escala Libre` para vincular matemáticamente ambas pantallas según su densidad física de píxeles (`163.18 PPI` en 27" ↔ `183.58 PPI` en 24", factor `1.125x`), recalculando instantáneamente las coordenadas lógicas contiguas sin solapamientos.
+         - Botón `📐 Disposición y Escalas ›` que abre la **Subvista de Pantallas Dual 4K** con:
+           - **Disposición Física (Arrangement):** Previsualización lado a lado (`⬅ Izquierda` / `➡ Derecha`), botón `⇄ Invertir Izq / Der`, selector de monitor principal (`★`), alineación vertical (`⬆ Arriba`, `⬌ Centro`, `⬇ Abajo`, `🖥 Escritorio y=519`) y ajuste fino vertical (`-50px` / `+50px`).
+           - **Escalado Individual por Monitor:** Deslizadores independientes (`100%`–`250%`) y botones de presets rápidos para **Monitor 1 (`DP-1 · LG 27" 4K`)** y **Monitor 2 (`HDMI-A-1 · Mi 24" 4K`)**, sincronizados automáticamente cuando el enlace 1:1 está activo.
+       - **Tarjeta y Selector de Teclado (`latam` Español Latinoamericano):**
+         - Distribución XKB predeterminada **`latam` (Español Latinoamericano)** con soporte completo para `ñ`, acentos muertos (`´`, `¨`) y símbolos latinoamericanos.
+         - Selector en vivo en el Centro de Control (`🇲🇽 Latam (ñ)`, `🇪🇸 España`, `🇺🇸 Inglés US`), indicador interactivo `⌨ LAT` en la Barra Superior y comando CLI `malus-ctl keyboard set latam`.
        - **Tarjeta Multimedia "En Reproducción" (MPRIS D-Bus):**
          - Título de canción/video, artista y nombre de la app (Brave, Spotify, VLC).
          - Botones de pista anterior, play/pause y siguiente pista.
@@ -153,7 +158,12 @@ graph TD
 * **Framework:** Smithay 0.7 en Rust.
 * **Backends:**
   - **Winit Backend:** Modo anidado para desarrollo en ventana.
-  - **DRM/KMS Backend:** Modo nativo para inicio de sesión directo desde GDM/TTY.
+  - **DRM/KMS Backend:** Modo nativo Multi-CRTC para inicio de sesión directo desde GDM/TTY con soporte para múltiples pantallas 4K independientes a 60 Hz (`DP-1` + `HDMI-A-1`).
+* **Gestión de Entrada y Teclado XKB:**
+  - Inicialización automática con distribución **`latam` (Español Latinoamericano)** desde `~/.config/malus-de/input.toml`.
+  - Conmutación de keymap XKB en caliente (`set_xkb_config`) vía IPC (`SetKeyboardLayout`) y vigilancia de archivo sin reiniciar el compositor.
+* **Escala Fraccionaria (`wp_fractional_scale_v1`) y Disposición en Vivo:**
+  - Recarga instantánea de `~/.config/malus-de/monitors.toml` vía IPC (`ReloadDisplaysConfig`), actualizando escalas fraccionarias por monitor, reconfigurando superficies Layer-Shell y migrando ventanas automáticamente al cambiar el orden o alineación de las pantallas.
 * **Pipeline de Renderizado & Efectos:**
   - Antialiasing subpíxel y esquinas squircle con Shader SDF.
   - **Animación Genie / Magic Lamp:** Interpolación de deformación de malla por GPU para contraer y desplegar ventanas hacia y desde sus respectivas posiciones en el Dock.
@@ -172,3 +182,4 @@ graph TD
 | **M5** | Animación Genie | ✅ Hecho | Renderizado elástico Compiz/macOS con física no lineal y textura continua. |
 | **M6** | Integración AirDrop | 🟡 En Progreso | Servicio D-Bus `malus-de-link`, modal de visibilidad y simulación nativa. Backend AWDL/BLE en curso. |
 | **M7** | Sesión GDM Nativa | ✅ Hecho | Entrada `malus.desktop`, wrapper `malus-session`, instalador `install-session.sh`, binarios Release y backend DRM/KMS. |
+| **M8** | Multi-Monitor 4K & Teclado Latam | ✅ Hecho | Disposición dual 4K en vivo, escalado independiente y enlazado 1:1 por PPI (`TrueSize`), y soporte nativo de teclado XKB Español Latinoamericano (`latam`). |

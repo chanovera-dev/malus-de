@@ -12,6 +12,7 @@ members = [
     "crates/link",
     "crates/wallpaper",
     "crates/ctl",
+    "crates/settings",
 ]
 
 [workspace.package]

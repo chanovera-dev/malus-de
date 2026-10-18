@@ -139,6 +139,9 @@ fn main() -> Result<()> {
     init_logging("malus_de_notifications");
     info!("Iniciando Malus DE Notification Daemon (D-Bus / GTK4 Layer Shell)...");
 
+    // Esperar de forma activa a que el compositor esté listo y aceptando conexiones
+    malus_de_common::wayland::wait_for_wayland(10);
+
     if let Err(err) = adw::init() {
         tracing::warn!("Aviso al inicializar libadwaita: {:?}", err);
     }

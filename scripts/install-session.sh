@@ -55,6 +55,7 @@ BINARIES=(
     "malus-de-session-lock"
     "malus-de-link"
     "malus-de-ctl"
+    "malus-de-settings"
 )
 
 for bin in "${BINARIES[@]}"; do
