@@ -65,6 +65,11 @@ button-layout='close,minimize,maximize:'
 color-scheme='prefer-light'
 cursor-theme='macOS'
 cursor-size=24
+icon-theme='Adwaita'
+gtk-theme='Adwaita'
+
+[org/gnome/settings-daemon/plugins/xsettings]
+overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
 "#;
     std::fs::write(keyfile_path, keyfile_content)?;
 
@@ -76,6 +81,7 @@ gtk-decoration-layout=close,minimize,maximize:
 gtk-application-prefer-dark-theme=0
 gtk-cursor-theme-name=macOS
 gtk-cursor-theme-size=24
+gtk-theme-name=Adwaita
 "#;
     std::fs::write(gtk3_dir.join("settings.ini"), gtk_ini_content)?;
 

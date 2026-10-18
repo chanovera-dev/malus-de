@@ -67,29 +67,35 @@ fn load_macos_settings_css() {
     let provider = CssProvider::new();
     let css = r#"
         window.macos-settings-window {
-            background-color: @window_bg_color;
+            background-color: @view_bg_color;
             color: @window_fg_color;
             border-radius: 0px;
             box-shadow: none;
         }
 
         .macos-sidebar {
-            background-color: @view_bg_color;
+            background-color: @sidebar_bg_color;
             border-right: 1px solid @borders;
-            padding: 12px 10px;
+            padding: 0px;
         }
 
         .sidebar-windowcontrols {
-            padding: 2px 4px 10px 4px;
+            min-height: 47px;
+            padding: 0px 9px;
+            background-color: @sidebar_bg_color;
+        }
+
+        .sidebar-body {
+            padding: 0px 10px 12px 10px;
         }
 
         .sidebar-search {
             background-color: alpha(currentColor, 0.06);
             border: 1px solid @borders;
-            border-radius: 10px;
+            border-radius: 8px;
             color: @window_fg_color;
             padding: 4px 8px;
-            margin-bottom: 10px;
+            margin-bottom: 8px;
         }
         .sidebar-search image {
             color: alpha(currentColor, 0.60);
@@ -98,19 +104,19 @@ fn load_macos_settings_css() {
         .profile-card {
             background-color: alpha(currentColor, 0.05);
             border: 1px solid @borders;
-            border-radius: 14px;
-            padding: 10px;
-            margin-bottom: 12px;
+            border-radius: 12px;
+            padding: 8px 10px;
+            margin-bottom: 10px;
         }
 
         .avatar-circle {
             background: linear-gradient(135deg, @accent_bg_color, #5e5ce6);
             border-radius: 999px;
-            min-width: 40px;
-            min-height: 40px;
+            min-width: 32px;
+            min-height: 32px;
             color: @accent_fg_color;
             font-weight: 700;
-            font-size: 16px;
+            font-size: 14px;
         }
 
         .sidebar-btn {
@@ -150,20 +156,21 @@ fn load_macos_settings_css() {
         .badge-dark { background: linear-gradient(180deg, #545458, #2c2c2e); }
 
         .content-header-toolbar {
-            padding: 14px 28px 6px 28px;
-            min-height: 44px;
-            background-color: transparent;
+            min-height: 47px;
+            padding: 0px 24px;
+            background-color: @view_bg_color;
+            border-bottom: 1px solid alpha(currentColor, 0.08);
         }
 
         .nav-chevron-btn {
             color: alpha(currentColor, 0.60);
-            font-size: 20px;
+            font-size: 18px;
             font-weight: 700;
-            padding: 0 6px;
+            padding: 0 4px;
             border-radius: 6px;
             background: transparent;
-            min-width: 26px;
-            min-height: 26px;
+            min-width: 24px;
+            min-height: 24px;
         }
         .nav-chevron-btn:hover {
             background-color: alpha(currentColor, 0.08);
@@ -171,9 +178,11 @@ fn load_macos_settings_css() {
         }
 
         .content-header-title {
-            font-size: 19px;
+            font-size: 15px;
             font-weight: 700;
             color: @window_fg_color;
+            margin: 0px;
+            padding: 0px;
         }
 
         .spotlight-banner-icon {
@@ -222,8 +231,8 @@ fn load_macos_settings_css() {
         }
 
         .content-pane {
-            background-color: @window_bg_color;
-            padding: 12px 28px 24px 28px;
+            background-color: @view_bg_color;
+            padding: 16px 28px 24px 28px;
         }
 
         .pane-header-title {
@@ -475,30 +484,24 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         .build();
     window.set_titlebar(Some(&dummy_titlebar));
 
-    let root_box = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .hexpand(true)
-        .vexpand(true)
-        .build();
-
     // ==========================================
     // 1. Barra Lateral Estilo macOS Sonoma / Sequoia
     // ==========================================
     let sidebar = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .width_request(240)
         .css_classes(["macos-sidebar"])
-        .spacing(4)
         .build();
 
     // Controles de ventana nativos (Cerrar, Minimizar, Maximizar) según el tema activo
     let window_controls_start = WindowControls::builder()
         .side(PackType::Start)
+        .valign(Align::Center)
         .build();
 
     let controls_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .css_classes(["sidebar-windowcontrols"])
+        .valign(Align::Center)
         .build();
     controls_box.append(&window_controls_start);
 
@@ -507,12 +510,18 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         .build();
     sidebar.append(&traffic_handle);
 
+    let sidebar_body = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(4)
+        .css_classes(["sidebar-body"])
+        .build();
+
     // Buscador de Ajustes
     let search_entry = SearchEntry::builder()
         .placeholder_text("Buscar")
         .css_classes(["sidebar-search"])
         .build();
-    sidebar.append(&search_entry);
+    sidebar_body.append(&search_entry);
 
     // Tarjeta de Perfil de Usuario estilo Apple ID
     let profile_card = GtkBox::builder()
@@ -540,23 +549,26 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         .orientation(Orientation::Vertical)
         .valign(Align::Center)
         .spacing(2)
+        .hexpand(true)
         .build();
     let profile_name = Label::builder()
         .label(&format!("{}{}", &initial_char, &user_name.chars().skip(1).collect::<String>()))
         .css_classes(["card-section-title"])
         .xalign(0.0)
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
         .build();
     let profile_sub = Label::builder()
         .label("Malus DE · Ecosistema Activo")
         .css_classes(["card-section-sub"])
         .xalign(0.0)
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
         .build();
     profile_text_box.append(&profile_name);
     profile_text_box.append(&profile_sub);
 
     profile_card.append(&avatar);
     profile_card.append(&profile_text_box);
-    sidebar.append(&profile_card);
+    sidebar_body.append(&profile_card);
 
     // Items de navegación de la barra lateral (macOS System Settings)
     let nav_items = [
@@ -601,15 +613,26 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             .label(label_txt)
             .xalign(0.0)
             .hexpand(true)
+            .ellipsize(gtk4::pango::EllipsizeMode::End)
             .build();
 
         row.append(&badge);
         row.append(&lbl);
         btn.set_child(Some(&row));
 
-        sidebar.append(&btn);
+        sidebar_body.append(&btn);
         sidebar_buttons.push((id.to_string(), btn));
     }
+
+    let sidebar_scroll = ScrolledWindow::builder()
+        .hscrollbar_policy(PolicyType::Never)
+        .vscrollbar_policy(PolicyType::Automatic)
+        .propagate_natural_height(true)
+        .child(&sidebar_body)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+    sidebar.append(&sidebar_scroll);
 
     // Filtro interactivo de búsqueda de la barra lateral
     let btns_for_search = sidebar_buttons.clone();
@@ -670,11 +693,13 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         .orientation(Orientation::Horizontal)
         .css_classes(["content-header-toolbar"])
         .spacing(12)
+        .valign(Align::Center)
         .build();
 
     let nav_btn_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(4)
+        .valign(Align::Center)
         .build();
 
     let btn_back = Button::builder()
@@ -683,6 +708,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         .tooltip_text("Atrás")
         .has_frame(false)
         .sensitive(false)
+        .valign(Align::Center)
         .build();
 
     let btn_forward = Button::builder()
@@ -691,6 +717,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         .tooltip_text("Adelante")
         .has_frame(false)
         .sensitive(false)
+        .valign(Align::Center)
         .build();
 
     nav_btn_box.append(&btn_back);
@@ -702,11 +729,13 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         .css_classes(["content-header-title"])
         .xalign(0.0)
         .hexpand(true)
+        .valign(Align::Center)
         .build();
     header_toolbar.append(&active_pane_title);
 
     let window_controls_end = WindowControls::builder()
         .side(PackType::End)
+        .valign(Align::Center)
         .build();
     header_toolbar.append(&window_controls_end);
 
@@ -813,10 +842,18 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     };
     active_pane_title.set_label(initial_title);
 
-    root_box.append(&sidebar);
-    root_box.append(&content_area);
+    let split_view = libadwaita::OverlaySplitView::builder()
+        .max_sidebar_width(280.0)
+        .min_sidebar_width(220.0)
+        .sidebar_width_fraction(0.245)
+        .sidebar_width_unit(libadwaita::LengthUnit::Px)
+        .enable_show_gesture(false)
+        .enable_hide_gesture(false)
+        .sidebar(&sidebar)
+        .content(&content_area)
+        .build();
 
-    window.set_child(Some(&root_box));
+    window.set_child(Some(&split_view));
     window.present();
 }
 
@@ -2433,7 +2470,7 @@ fn set_cursor_theme_and_size(theme: &str, size: u32) {
             let _ = std::fs::create_dir_all(parent);
         }
         let body = format!(
-            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme={}\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\n",
+            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme={}\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-theme-name=Adwaita\n",
             dark_num, theme, size
         );
         let _ = std::fs::write(p, body);
