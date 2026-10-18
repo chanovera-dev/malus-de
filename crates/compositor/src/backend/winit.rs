@@ -853,6 +853,8 @@ pub fn run_winit() -> Result<()> {
                         shadow_pipeline = frame.with_context(|gl| crate::shadow::WindowShadowPipeline::new(gl)).ok().flatten();
                     }
 
+                    let projection = *frame.projection();
+
                     // 2. Renderizar superficies de cada ventana con sus sombras proyectadas y esquinas squircle
                     for (root_id, win_elems, _popups, should_round, is_active, win_rect, content_offset, content_size) in &window_render_data {
                         if win_elems.is_empty() {
@@ -864,7 +866,7 @@ pub fn run_winit() -> Result<()> {
                         if *should_round {
                             if let (Some(r), Some(ref shadow)) = (win_phys_r, shadow_pipeline.as_ref()) {
                                 let _ = frame.with_context(|gl| {
-                                    shadow.render_shadow(gl, size, *win_rect, r as f32, *is_active, 1.0);
+                                    shadow.render_shadow(gl, &projection, *win_rect, r as f32, *is_active, 1.0);
                                 });
                             }
                         }

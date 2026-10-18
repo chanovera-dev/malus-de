@@ -11,39 +11,48 @@
 
 use smithay::{
     backend::renderer::gles::ffi,
-    utils::{Physical, Rectangle, Size},
+    utils::{Physical, Rectangle},
 };
 use tracing::{error, info};
 
 const SHADOW_VERT_SRC: &str = r#"#version 300 es
 precision highp float;
 
-out vec2 v_uv;
+uniform mat3 u_matrix;
+uniform vec4 u_quad_rect; // (loc.x, loc.y, size.w, size.h) en coordenadas físicas de pantalla
+
+out vec2 v_local_px; // Coordenadas locales en píxeles dentro del quad de sombra (0..w, 0..h)
 
 void main() {
-    // Generación procedural analítica de quad directamente desde gl_VertexID (0..3)
-    // Cero dependencias de VBOs ni estado de atributos externos (100% inmune a fugas de instancing)
-    float x = (gl_VertexID == 1 || gl_VertexID == 3) ? 1.0 : -1.0;
-    float y = (gl_VertexID == 2 || gl_VertexID == 3) ? 1.0 : -1.0;
-    v_uv = vec2((x + 1.0) * 0.5, (y + 1.0) * 0.5);
-    gl_Position = vec4(x, y, 0.0, 1.0);
+    // Generación analítica de quad directamente desde gl_VertexID (0..3) con TRIANGLE_STRIP:
+    // 0: (0, 0) - superior-izquierda
+    // 1: (1, 0) - superior-derecha
+    // 2: (0, 1) - inferior-izquierda
+    // 3: (1, 1) - inferior-derecha
+    float u = (gl_VertexID == 1 || gl_VertexID == 3) ? 1.0 : 0.0;
+    float v = (gl_VertexID == 2 || gl_VertexID == 3) ? 1.0 : 0.0;
+
+    vec2 screen_pos = u_quad_rect.xy + vec2(u * u_quad_rect.z, v * u_quad_rect.w);
+    v_local_px = vec2(u * u_quad_rect.z, v * u_quad_rect.w);
+
+    vec3 ndc = u_matrix * vec3(screen_pos, 1.0);
+    gl_Position = vec4(ndc.xy, 0.0, 1.0);
 }
 "#;
 
 const SHADOW_FRAG_SRC: &str = r#"#version 300 es
 precision highp float;
 
-in vec2 v_uv;
+in vec2 v_local_px;
 out vec4 frag_color;
 
-uniform vec2 u_quad_size;       // Dimensiones físicas del quad de sombra
 uniform vec2 u_win_size;        // Dimensiones físicas de la ventana visible
 uniform vec2 u_pad;             // Margen de expansión (pad_x, pad_y_top)
 uniform float u_corner_radius;  // Radio squircle de la ventana (ej. 32.0 px)
 uniform float u_exponent;       // Exponente superelíptico (4.2 continuo)
 uniform float u_blur_radius;    // Radio de dispersión gaussiana
 uniform float u_spread;         // Expansión sólida de la sombra
-uniform float u_offset_y;       // Desplazamiento de luz cenital (luz hacia abajo)
+uniform float u_offset_y;       // Desplazamiento de luz cenital (luz hacia abajo, u_offset_y > 0)
 uniform float u_opacity;        // Opacidad pico de la sombra
 
 // Distancia con signo analítica a un squircle superelíptico (n=4.2)
@@ -56,45 +65,43 @@ float squircle_sdf(vec2 p, vec2 b, float r, float exp_val) {
 }
 
 void main() {
-    // Coordenadas locales en píxeles dentro del quad de sombra (origen arriba-izquierda)
-    vec2 px = vec2(v_uv.x * u_quad_size.x, (1.0 - v_uv.y) * u_quad_size.y);
-
-    // Centro físico de la ventana dentro del quad
+    // Centro físico y semiejes de la ventana dentro del quad de sombra
     vec2 win_center = u_pad + u_win_size * 0.5;
     vec2 win_half = u_win_size * 0.5;
-
-    // 1. Recorte interior (Inner Cutout): la sombra sólo existe FUERA del perímetro de la ventana
-    vec2 p_win = px - win_center;
     float effective_r = min(u_corner_radius, min(win_half.x, win_half.y));
+
+    // 1. Recorte interior (Inner Cutout): la sombra sólo existe FUERA del contorno visible de la ventana.
+    // Transición suave [-1.5, 0.0] que desliza la sombra justo bajo el borde anti-aliased
+    // de la ventana para garantizar cero desfases ni líneas blancas visibles.
+    vec2 p_win = v_local_px - win_center;
     float d_win = squircle_sdf(p_win, win_half, effective_r, u_exponent);
-    float inner_mask = smoothstep(-1.2, 0.2, d_win);
+    float inner_mask = smoothstep(-1.5, 0.0, d_win);
 
     if (inner_mask <= 0.001) {
         discard;
     }
 
-    // 2. Cálculo de la sombra con desplazamiento cenital (key light) y dispersión
-    vec2 shadow_center = win_center + vec2(0.0, u_offset_y);
-    vec2 p_shadow = px - shadow_center;
-    vec2 shadow_half = win_half + vec2(u_spread);
-    float shadow_r = effective_r + u_spread;
-    float d_shadow = squircle_sdf(p_shadow, shadow_half, shadow_r, u_exponent);
+    // 2. Modelo de doble lóbulo estilo macOS (Sequoia / Sonoma):
+    // Luz cenital cenital suave: la sombra cae de ARRIBA hacia ABAJO (+Y).
+    // - Sombra de contacto: nítida, cercana al contorno, offset mínimo, define el marco
+    vec2 contact_center = win_center + vec2(0.0, u_offset_y * 0.22);
+    vec2 p_contact = v_local_px - contact_center;
+    float d_contact = max(squircle_sdf(p_contact, win_half, effective_r, u_exponent), 0.0);
+    float contact_sigma = max(u_blur_radius * 0.25, 2.0);
+    float contact = exp(-pow(d_contact / contact_sigma, 2.0)) * 0.35;
 
-    float d = max(d_shadow, 0.0);
+    // - Sombra ambiental: amplia y etérea penumbra difusa que cae prominentemente hacia abajo
+    vec2 ambient_center = win_center + vec2(0.0, u_offset_y);
+    vec2 p_ambient = v_local_px - ambient_center;
+    vec2 ambient_half = win_half + vec2(u_spread);
+    float d_ambient = max(squircle_sdf(p_ambient, ambient_half, effective_r + u_spread, u_exponent), 0.0);
+    float ambient_sigma = max(u_blur_radius, 4.0);
+    float ambient = exp(-pow(d_ambient / ambient_sigma, 1.45)) * 0.65;
 
-    // 3. Modelo de doble lóbulo estilo macOS Sequoia / Sonoma:
-    // - Sombra de contacto: intensa y cercana al borde
-    // - Sombra ambiental: amplia y suave penumbra
-    float contact_sigma = max(u_blur_radius * 0.28, 1.0);
-    float contact = exp(-pow(d / contact_sigma, 2.0)) * 0.48;
-
-    float ambient_sigma = max(u_blur_radius, 1.0);
-    float ambient = exp(-pow(d / ambient_sigma, 1.65)) * 0.52;
-
-    float shadow_intensity = (d_shadow <= 0.0) ? 1.0 : (contact + ambient);
+    float shadow_intensity = contact + ambient;
     float final_alpha = shadow_intensity * u_opacity * inner_mask;
 
-    if (final_alpha <= 0.002) {
+    if (final_alpha <= 0.001) {
         discard;
     }
 
@@ -104,7 +111,8 @@ void main() {
 
 pub struct WindowShadowPipeline {
     program: ffi::types::GLuint,
-    u_quad_size: ffi::types::GLint,
+    u_matrix: ffi::types::GLint,
+    u_quad_rect: ffi::types::GLint,
     u_win_size: ffi::types::GLint,
     u_pad: ffi::types::GLint,
     u_corner_radius: ffi::types::GLint,
@@ -141,7 +149,8 @@ impl WindowShadowPipeline {
                 return None;
             }
 
-            let u_quad_size = gl.GetUniformLocation(program, c"u_quad_size".as_ptr() as *const ffi::types::GLchar);
+            let u_matrix = gl.GetUniformLocation(program, c"u_matrix".as_ptr() as *const ffi::types::GLchar);
+            let u_quad_rect = gl.GetUniformLocation(program, c"u_quad_rect".as_ptr() as *const ffi::types::GLchar);
             let u_win_size = gl.GetUniformLocation(program, c"u_win_size".as_ptr() as *const ffi::types::GLchar);
             let u_pad = gl.GetUniformLocation(program, c"u_pad".as_ptr() as *const ffi::types::GLchar);
             let u_corner_radius = gl.GetUniformLocation(program, c"u_corner_radius".as_ptr() as *const ffi::types::GLchar);
@@ -155,7 +164,8 @@ impl WindowShadowPipeline {
 
             Some(Self {
                 program,
-                u_quad_size,
+                u_matrix,
+                u_quad_rect,
                 u_win_size,
                 u_pad,
                 u_corner_radius,
@@ -172,7 +182,7 @@ impl WindowShadowPipeline {
     pub fn render_shadow(
         &self,
         gl: &ffi::Gles2,
-        screen_size: Size<i32, Physical>,
+        projection: &[f32; 9],
         win_rect: Rectangle<i32, Physical>,
         corner_radius: f32,
         is_active: bool,
@@ -182,42 +192,44 @@ impl WindowShadowPipeline {
             return;
         }
 
-        // Parámetros de sombra calibrados al estilo macOS Sequoia / Sonoma
+        // Parámetros de sombra calibrados con fidelidad estética macOS Sequoia / Sonoma:
+        // - Opacidad sutil, delicada y etérea (~0.26 activa, ~0.15 inactiva)
+        // - Luz cenital superior: la sombra se proyecta hacia abajo (offset_y positivo)
+        // - Penumbra amplia y suave que aporta sensación de flotabilidad tridimensional
         let (blur_radius, spread, offset_y, opacity) = if is_active {
             (
-                48.0 * scale as f32,
-                4.0 * scale as f32,
-                16.0 * scale as f32,
-                0.58f32,
+                42.0 * scale as f32,
+                2.5 * scale as f32,
+                14.0 * scale as f32,
+                0.26f32,
             )
         } else {
             (
-                26.0 * scale as f32,
-                2.0 * scale as f32,
-                8.0 * scale as f32,
-                0.38f32,
+                22.0 * scale as f32,
+                1.0 * scale as f32,
+                6.0 * scale as f32,
+                0.15f32,
             )
         };
 
-        // Expansión del quad de sombra para dar margen a la penumbra difusa
+        // Expansión del quad de sombra para dar margen completo a la penumbra difusa:
+        // Puesto que la luz viene de arriba, la sombra cae hacia abajo (+Y):
+        // - pad_y_top requiere menor expansión
+        // - pad_y_bottom requiere mayor expansión para alojar la caída de la sombra
         let pad_x = (blur_radius * 2.2 + spread).round() as i32;
-        let pad_y_top = (blur_radius * 2.2 + spread - offset_y).max(0.0).round() as i32;
-        let pad_y_bottom = (blur_radius * 2.2 + spread + offset_y).round() as i32;
+        let pad_y_top = (blur_radius * 1.6 + spread - offset_y * 0.4).max(blur_radius * 0.6).round() as i32;
+        let pad_y_bottom = (blur_radius * 2.5 + spread + offset_y).round() as i32;
 
         let quad_x = win_rect.loc.x - pad_x;
         let quad_y = win_rect.loc.y - pad_y_top;
         let quad_w = win_rect.size.w + pad_x * 2;
         let quad_h = win_rect.size.h + pad_y_top + pad_y_bottom;
 
-        // Coordenada Y en OpenGL (origen abajo-izquierda)
-        let gl_y = screen_size.h - (quad_y + quad_h);
-
         unsafe {
             // Guardar estado GL previo
-            let mut prev_viewport = [0i32; 4];
-            gl.GetIntegerv(ffi::VIEWPORT, prev_viewport.as_mut_ptr());
             let prev_blend = gl.IsEnabled(ffi::BLEND);
             let prev_scissor = gl.IsEnabled(ffi::SCISSOR_TEST);
+            let prev_cull = gl.IsEnabled(ffi::CULL_FACE);
 
             let mut prev_src_rgb = 0;
             let mut prev_dst_rgb = 0;
@@ -228,8 +240,9 @@ impl WindowShadowPipeline {
             gl.GetIntegerv(ffi::BLEND_SRC_ALPHA, &mut prev_src_alpha);
             gl.GetIntegerv(ffi::BLEND_DST_ALPHA, &mut prev_dst_alpha);
 
-            // Asegurar que no se corte por el scissor previo de Smithay
+            // Desactivar scissor previo para que la penumbra no sea recortada
             gl.Disable(ffi::SCISSOR_TEST);
+            gl.Disable(ffi::CULL_FACE);
 
             // Blending que oscurece el fondo suavemente según alpha sin degradar el canal alfa del framebuffer (mantiene 1.0)
             gl.Enable(ffi::BLEND);
@@ -240,11 +253,10 @@ impl WindowShadowPipeline {
                 ffi::ONE,
             );
 
-            gl.Viewport(quad_x, gl_y, quad_w, quad_h);
-
             gl.UseProgram(self.program);
 
-            gl.Uniform2f(self.u_quad_size, quad_w as f32, quad_h as f32);
+            gl.UniformMatrix3fv(self.u_matrix, 1, ffi::FALSE, projection.as_ptr());
+            gl.Uniform4f(self.u_quad_rect, quad_x as f32, quad_y as f32, quad_w as f32, quad_h as f32);
             gl.Uniform2f(self.u_win_size, win_rect.size.w as f32, win_rect.size.h as f32);
             gl.Uniform2f(self.u_pad, pad_x as f32, pad_y_top as f32);
             gl.Uniform1f(self.u_corner_radius, corner_radius);
@@ -281,12 +293,9 @@ impl WindowShadowPipeline {
             if prev_scissor != ffi::FALSE {
                 gl.Enable(ffi::SCISSOR_TEST);
             }
-            gl.Viewport(
-                prev_viewport[0],
-                prev_viewport[1],
-                prev_viewport[2],
-                prev_viewport[3],
-            );
+            if prev_cull != ffi::FALSE {
+                gl.Enable(ffi::CULL_FACE);
+            }
         }
     }
 }
