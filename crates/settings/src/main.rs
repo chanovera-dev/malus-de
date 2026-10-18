@@ -1,10 +1,10 @@
 use clap::Parser;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea, Entry,
-    FileChooserAction, FileChooserNative, FileFilter, FlowBox, GestureClick, GestureDrag, Label,
-    Orientation, Picture, PolicyType, Scale, ScrolledWindow, SearchEntry, Stack,
-    StackTransitionType, Switch, CheckButton, WindowHandle,
+    Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, CssProvider,
+    DrawingArea, Entry, FileChooserAction, FileChooserNative, FileFilter, FlowBox, GestureClick,
+    GestureDrag, Label, Orientation, PackType, Picture, PolicyType, Scale, ScrolledWindow,
+    SearchEntry, Stack, StackTransitionType, Switch, WindowControls, WindowHandle,
 };
 use malus_de_common::config::{DisplaysConfig, DockConfig, InputConfig};
 use malus_de_common::ipc::{IpcClient, IpcMessage};
@@ -71,7 +71,6 @@ fn load_macos_settings_css() {
             color: @window_fg_color;
             border-radius: 0px;
             box-shadow: none;
-            font-family: "Inter", "SF Pro Display", "Cantarell", sans-serif;
         }
 
         .macos-sidebar {
@@ -80,24 +79,9 @@ fn load_macos_settings_css() {
             padding: 12px 10px;
         }
 
-        .traffic-lights-box {
-            padding: 2px 6px 10px 6px;
+        .sidebar-windowcontrols {
+            padding: 2px 4px 10px 4px;
         }
-
-        .traffic-btn {
-            min-width: 13px;
-            min-height: 13px;
-            padding: 0;
-            margin: 0;
-            border-radius: 999px;
-            border: none;
-        }
-        .traffic-close { background-color: #ff5f57; }
-        .traffic-close:hover { background-color: #ff7b74; }
-        .traffic-min { background-color: #febc2e; }
-        .traffic-min:hover { background-color: #ffd066; }
-        .traffic-max { background-color: #28c840; }
-        .traffic-max:hover { background-color: #52df67; }
 
         .sidebar-search {
             background-color: alpha(currentColor, 0.06);
@@ -305,20 +289,6 @@ fn load_macos_settings_css() {
             filter: brightness(1.10);
         }
 
-        link,
-        link:hover,
-        link:active,
-        button.link {
-            color: @accent_color;
-            text-decoration: none;
-            border-radius: 8px;
-            padding: 2px 6px;
-            transition: background-color 100ms ease;
-        }
-        link:hover,
-        button.link:hover {
-            background-color: alpha(@accent_color, 0.15);
-        }
 
         .scale-input-entry {
             background-color: alpha(currentColor, 0.07);
@@ -444,14 +414,6 @@ fn load_macos_settings_css() {
             box-shadow: 0 0 10px alpha(@accent_bg_color, 0.30);
         }
 
-        entry,
-        searchentry {
-            background-color: alpha(currentColor, 0.06);
-            border: 1px solid @borders;
-            border-radius: 8px;
-            color: @window_fg_color;
-        }
-
         scrolledwindow,
         viewport {
             background: transparent;
@@ -486,7 +448,7 @@ fn load_macos_settings_css() {
             color: @card_fg_color;
         }
     "#;
-    provider.load_from_data(css);
+    provider.load_from_string(css);
     if let Some(display) = gtk4::gdk::Display::default() {
         gtk4::style_context_add_provider_for_display(
             &display,
@@ -529,51 +491,19 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         .spacing(4)
         .build();
 
-    // Semáforo macOS (Cerrar, Minimizar, Maximizar) dentro de WindowHandle
-    let traffic_box = GtkBox::builder()
+    // Controles de ventana nativos (Cerrar, Minimizar, Maximizar) según el tema activo
+    let window_controls_start = WindowControls::builder()
+        .side(PackType::Start)
+        .build();
+
+    let controls_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(8)
-        .css_classes(["traffic-lights-box"])
+        .css_classes(["sidebar-windowcontrols"])
         .build();
-
-    let btn_close = Button::builder()
-        .css_classes(["traffic-btn", "traffic-close"])
-        .tooltip_text("Cerrar Ajustes (⌘Q)")
-        .has_frame(false)
-        .build();
-    let btn_min = Button::builder()
-        .css_classes(["traffic-btn", "traffic-min"])
-        .tooltip_text("Minimizar (⌘M)")
-        .has_frame(false)
-        .build();
-    let btn_max = Button::builder()
-        .css_classes(["traffic-btn", "traffic-max"])
-        .tooltip_text("Maximizar")
-        .has_frame(false)
-        .build();
-
-    let win_close = window.clone();
-    btn_close.connect_clicked(move |_| {
-        win_close.close();
-    });
-    btn_min.connect_clicked(move |_| {
-        let _ = IpcClient::send_command(IpcMessage::HideActiveWindow);
-    });
-    let win_max = window.clone();
-    btn_max.connect_clicked(move |_| {
-        if win_max.is_maximized() {
-            win_max.unmaximize();
-        } else {
-            win_max.maximize();
-        }
-    });
-
-    traffic_box.append(&btn_close);
-    traffic_box.append(&btn_min);
-    traffic_box.append(&btn_max);
+    controls_box.append(&window_controls_start);
 
     let traffic_handle = WindowHandle::builder()
-        .child(&traffic_box)
+        .child(&controls_box)
         .build();
     sidebar.append(&traffic_handle);
 
@@ -774,6 +704,11 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         .hexpand(true)
         .build();
     header_toolbar.append(&active_pane_title);
+
+    let window_controls_end = WindowControls::builder()
+        .side(PackType::End)
+        .build();
+    header_toolbar.append(&window_controls_end);
 
     let header_handle = WindowHandle::builder()
         .child(&header_toolbar)
