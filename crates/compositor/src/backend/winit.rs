@@ -812,9 +812,9 @@ pub fn run_winit() -> Result<()> {
                                 popup_elems.extend(p_elems);
                             }
 
-                            let is_maximized_or_fullscreen = window.toplevel().map(|t| {
+                            let is_fullscreen = window.toplevel().map(|t| {
                                 let states = &t.current_state().states;
-                                states.contains(XdgState::Maximized) || states.contains(XdgState::Fullscreen)
+                                states.contains(XdgState::Fullscreen)
                             }).unwrap_or(false);
 
                             let is_active = window.toplevel().map(|t| {
@@ -823,7 +823,7 @@ pub fn run_winit() -> Result<()> {
                             }).unwrap_or(false) || (state.seat.get_keyboard().and_then(|k| k.current_focus()).as_ref() == Some(main_surface.as_ref()));
 
                             let root_id = smithay::backend::renderer::element::Id::from_wayland_resource(main_surface.as_ref());
-                            let should_round = win_phys_r.is_some() && !is_maximized_or_fullscreen;
+                            let should_round = win_phys_r.is_some() && !is_fullscreen;
                             let content_offset = geo.loc.to_physical_precise_round(1.0);
                             let content_size = geo.size.to_physical_precise_round(1.0);
                             let win_screen_rect = Rectangle::new(
@@ -862,7 +862,7 @@ pub fn run_winit() -> Result<()> {
                         }
 
                         // 2.1. SOMBRA PROYECTADA (Window Drop Shadow con Squircle SDF n=4.2)
-                        // Se dibuja para ventanas no maximizadas inmediatamente antes de su superficie
+                        // Se dibuja para ventanas no en pantalla completa inmediatamente antes de su superficie
                         if *should_round {
                             if let (Some(r), Some(ref shadow)) = (win_phys_r, shadow_pipeline.as_ref()) {
                                 let _ = frame.with_context(|gl| {
