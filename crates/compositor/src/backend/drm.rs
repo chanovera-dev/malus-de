@@ -1482,17 +1482,38 @@ pub fn run_drm() -> Result<()> {
                         continue;
                     }
                     if let Some(geo) = layer_map.layer_geometry(surface) {
-                        let elems = smithay::backend::renderer::element::AsRenderElements::<GlesRenderer>::render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
-                            surface,
+                        let layer_loc = geo.loc.to_physical_precise_round(scale);
+                        let s_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = render_elements_from_surface_tree(
                             &mut renderer,
-                            geo.loc.to_physical_precise_round(scale),
+                            surface.wl_surface(),
+                            layer_loc,
                             smithay::utils::Scale::from(scale),
                             1.0,
+                            Kind::Unspecified,
                         );
+                        let mut p_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
+                        for (popup, popup_offset) in smithay::desktop::PopupManager::popups_for_surface(surface.wl_surface()) {
+                            let offset = (popup_offset - popup.geometry().loc)
+                                .to_f64()
+                                .to_physical(scale)
+                                .to_i32_round();
+                            let elems = render_elements_from_surface_tree(
+                                &mut renderer,
+                                popup.wl_surface(),
+                                layer_loc + offset,
+                                smithay::utils::Scale::from(scale),
+                                1.0,
+                                Kind::Unspecified,
+                            );
+                            p_elems.extend(elems);
+                        }
+
                         if matches!(surface.layer(), Layer::Background | Layer::Bottom) {
-                            lower_elements.extend(elems);
+                            lower_elements.extend(s_elems);
+                            lower_elements.extend(p_elems);
                         } else {
-                            upper_elements.extend(elems);
+                            upper_elements.extend(s_elems);
+                            upper_elements.extend(p_elems);
                         }
                     }
                 }
@@ -1504,31 +1525,32 @@ pub fn run_drm() -> Result<()> {
                         let win_global_rect = Rectangle::new(loc, geo.size);
                         if output_geo.overlaps(win_global_rect) {
                             let phys_loc = (loc - geo.loc - output_geo.loc).to_physical_precise_round(scale);
-                            let elems = smithay::backend::renderer::element::AsRenderElements::<GlesRenderer>::render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
-                                window,
+                            let Some(main_surface) = window.wl_surface() else {
+                                continue;
+                            };
+
+                            let win_surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = render_elements_from_surface_tree(
                                 &mut renderer,
+                                main_surface.as_ref(),
                                 phys_loc,
                                 smithay::utils::Scale::from(scale),
                                 1.0,
+                                Kind::Unspecified,
                             );
 
-                            let main_surface = window.wl_surface();
-                            let mut popup_ids = std::collections::HashSet::new();
-                            if let Some(ref ms) = main_surface {
-                                for (popup, _) in smithay::desktop::PopupManager::popups_for_surface(ms) {
-                                    smithay::wayland::compositor::with_surface_tree_downward(
-                                        popup.wl_surface(),
-                                        (),
-                                        |_, _, _| smithay::wayland::compositor::TraversalAction::DoChildren(()),
-                                        |surf, _, _| {
-                                            popup_ids.insert(smithay::backend::renderer::element::Id::from_wayland_resource(surf));
-                                        },
-                                        |_, _, _| true,
-                                    );
-                                }
+                            let mut popup_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
+                            for (popup, popup_offset) in smithay::desktop::PopupManager::popups_for_surface(main_surface.as_ref()) {
+                                let offset = (geo.loc + popup_offset - popup.geometry().loc).to_physical_precise_round(scale);
+                                let p_elems = render_elements_from_surface_tree(
+                                    &mut renderer,
+                                    popup.wl_surface(),
+                                    phys_loc + offset,
+                                    smithay::utils::Scale::from(scale),
+                                    1.0,
+                                    Kind::Unspecified,
+                                );
+                                popup_elems.extend(p_elems);
                             }
-
-                            let (popup_elems, win_surfaces): (Vec<_>, Vec<_>) = elems.into_iter().partition(|e| popup_ids.contains(e.id()));
 
                             let is_maximized_or_fullscreen = window.toplevel().map(|t| {
                                 let states = &t.current_state().states;
@@ -1538,11 +1560,9 @@ pub fn run_drm() -> Result<()> {
                             let is_active = window.toplevel().map(|t| {
                                 let states = &t.current_state().states;
                                 states.contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated)
-                            }).unwrap_or(false) || (state.seat.get_keyboard().and_then(|k| k.current_focus()).as_ref() == main_surface.as_deref());
+                            }).unwrap_or(false) || (state.seat.get_keyboard().and_then(|k| k.current_focus()).as_ref() == Some(main_surface.as_ref()));
 
-                            let root_id = main_surface.as_ref().map(|ms| {
-                                smithay::backend::renderer::element::Id::from_wayland_resource(ms.as_ref())
-                            });
+                            let root_id = smithay::backend::renderer::element::Id::from_wayland_resource(main_surface.as_ref());
 
                             let should_round = win_phys_r.is_some() && !is_maximized_or_fullscreen;
                             let content_offset = geo.loc.to_physical_precise_round(scale);
@@ -1594,7 +1614,7 @@ pub fn run_drm() -> Result<()> {
                             // 2.2. SUPERFICIES DE LA VENTANA (con recorte Squircle en raíz)
                             if *should_round {
                                 for elem in win_elems {
-                                    let is_root = root_id.as_ref().map(|id| elem.id() == id).unwrap_or(true);
+                                    let is_root = elem.id() == root_id;
                                     if is_root {
                                         if let (Some(r), Some(ref shader)) = (win_phys_r, window_squircle_shader.as_ref()) {
                                             let elem_geo = elem.geometry(smithay::utils::Scale::from(scale));
