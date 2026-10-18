@@ -124,9 +124,9 @@ toast-overlay,
 adw-toolbar-view,
 adw-window,
 adw-application-window {
-    border-radius: 0px !important;
-    box-shadow: none !important;
-    margin: 0px !important;
+    border-radius: 0px;
+    box-shadow: none;
+    margin: 0px;
 }
 
 headerbar,
@@ -134,9 +134,9 @@ headerbar.flat,
 .titlebar,
 tabbar,
 tab-bar {
-    border-top-left-radius: 0px !important;
-    border-top-right-radius: 0px !important;
-    border-radius: 0px !important;
+    border-top-left-radius: 0px;
+    border-top-right-radius: 0px;
+    border-radius: 0px;
 }
 
 /* Ventanas maximizadas o en pantalla completa: esquinas rectas (0px) */
@@ -146,7 +146,7 @@ window.maximized.background,
 window.fullscreen.background,
 window.maximized headerbar,
 window.fullscreen headerbar {
-    border-radius: 0px !important;
+    border-radius: 0px;
 }
 
 /* Menús emergentes, popovers y context menus estilo Squircle macOS */
