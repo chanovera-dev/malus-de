@@ -52,7 +52,7 @@ use std::path::PathBuf;
 /// con el layout de botones a la macOS (`close,minimize,maximize:`) sin alterar dconf del host.
 pub fn setup_isolated_session_environment() -> std::io::Result<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let malus_config_dir = PathBuf::from(home).join(".config").join("malus-de");
+    let malus_config_dir = PathBuf::from(&home).join(".config").join("malus-de");
 
     // 1. Directorio glib-2.0/settings para el backend GSettings keyfile
     let keyfile_dir = malus_config_dir.join("glib-2.0").join("settings");
@@ -100,18 +100,33 @@ windowcontrols.start {
 }
 
 /* Ventanas GTK3, GTK4 y Libadwaita: esquinas rectas a nivel de widget para permitir
-   que el compositor GPU de Malus DE aplique el recorte Squircle superelíptico continuo (n=4.2, 32px)
-   y el bisel reflectante de macOS sin doble recorte ni distorsión circular */
+   que el compositor GPU de Malus DE aplique el recorte Squircle superelíptico continuo (n=4.2)
+   sin doble recorte circular previo ni márgenes de sombra CSD */
 window,
 window.background,
 window.csd,
 window.unified,
 window.solid-csd,
+window.messagedialog,
+window.dialog,
 decoration,
-.solid-csd {
-    border-radius: 0px;
-    box-shadow: none;
-    margin: 0px;
+.solid-csd,
+headerbar,
+headerbar.flat,
+.titlebar,
+tabbar,
+tab-bar,
+navigation-view,
+navigation-view > widget,
+leaflet,
+flap,
+toast-overlay,
+adw-toolbar-view,
+adw-window,
+adw-application-window {
+    border-radius: 0px !important;
+    box-shadow: none !important;
+    margin: 0px !important;
 }
 
 headerbar,
@@ -119,9 +134,9 @@ headerbar.flat,
 .titlebar,
 tabbar,
 tab-bar {
-    border-top-left-radius: 0px;
-    border-top-right-radius: 0px;
-    border-radius: 0px;
+    border-top-left-radius: 0px !important;
+    border-top-right-radius: 0px !important;
+    border-radius: 0px !important;
 }
 
 /* Ventanas maximizadas o en pantalla completa: esquinas rectas (0px) */
@@ -131,7 +146,7 @@ window.maximized.background,
 window.fullscreen.background,
 window.maximized headerbar,
 window.fullscreen headerbar {
-    border-radius: 0px;
+    border-radius: 0px !important;
 }
 
 /* Menús emergentes, popovers y context menus estilo Squircle macOS */
@@ -168,6 +183,14 @@ button.link:hover {
 "#;
     let _ = std::fs::write(gtk3_dir.join("gtk.css"), gtk_css_content);
     let _ = std::fs::write(gtk4_dir.join("gtk.css"), gtk_css_content);
+
+    // Sincronizar también con ~/.config/gtk-3.0 y ~/.config/gtk-4.0
+    let user_gtk3 = PathBuf::from(&home).join(".config/gtk-3.0");
+    let user_gtk4 = PathBuf::from(&home).join(".config/gtk-4.0");
+    let _ = std::fs::create_dir_all(&user_gtk3);
+    let _ = std::fs::create_dir_all(&user_gtk4);
+    let _ = std::fs::write(user_gtk3.join("gtk.css"), gtk_css_content);
+    let _ = std::fs::write(user_gtk4.join("gtk.css"), gtk_css_content);
 
     // 3. Biblioteca compartida para garantizar botones consistentes en GTK3/GTK4 (macOS style)
     let lib_dir = malus_config_dir.join("lib");

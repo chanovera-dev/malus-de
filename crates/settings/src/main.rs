@@ -69,8 +69,8 @@ fn load_macos_settings_css() {
         window.macos-settings-window {
             background-color: @window_bg_color;
             color: @window_fg_color;
-            border-radius: 12px;
-            box-shadow: 0 18px 45px rgba(0, 0, 0, 0.35), 0 0 0 1px @borders;
+            border-radius: 0px;
+            box-shadow: none;
             font-family: "Inter", "SF Pro Display", "Cantarell", sans-serif;
         }
 

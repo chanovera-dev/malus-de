@@ -1,6 +1,7 @@
 pub mod backend;
 pub mod blur;
 pub mod grabs;
+pub mod shadow;
 pub mod state;
 pub mod window_corners;
 

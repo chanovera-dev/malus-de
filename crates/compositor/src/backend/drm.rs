@@ -1216,6 +1216,7 @@ pub fn run_drm() -> Result<()> {
     let mut squircle_corner_cache: std::collections::HashMap<i32, [GlesTexture; 4]> = std::collections::HashMap::new();
     let mut blur_pipeline: Option<crate::blur::DualKawaseBlur> = None;
     let mut window_squircle_shader: Option<crate::window_corners::WindowSquircleShader> = None;
+    let mut shadow_pipeline: Option<crate::shadow::WindowShadowPipeline> = None;
 
     while state.is_running {
         // Si la sesión TTY no está activa (VT switch away), pausar renderizado para no saturar GPU
@@ -1511,12 +1512,34 @@ pub fn run_drm() -> Result<()> {
                                 1.0,
                             );
 
+                            let main_surface = window.wl_surface();
+                            let mut popup_ids = std::collections::HashSet::new();
+                            if let Some(ref ms) = main_surface {
+                                for (popup, _) in smithay::desktop::PopupManager::popups_for_surface(ms) {
+                                    smithay::wayland::compositor::with_surface_tree_downward(
+                                        popup.wl_surface(),
+                                        (),
+                                        |_, _, _| smithay::wayland::compositor::TraversalAction::DoChildren(()),
+                                        |surf, _, _| {
+                                            popup_ids.insert(smithay::backend::renderer::element::Id::from_wayland_resource(surf));
+                                        },
+                                        |_, _, _| true,
+                                    );
+                                }
+                            }
+
+                            let (popup_elems, win_surfaces): (Vec<_>, Vec<_>) = elems.into_iter().partition(|e| popup_ids.contains(e.id()));
+
                             let is_maximized_or_fullscreen = window.toplevel().map(|t| {
                                 let states = &t.current_state().states;
                                 states.contains(XdgState::Maximized) || states.contains(XdgState::Fullscreen)
                             }).unwrap_or(false);
 
-                            let main_surface = window.wl_surface();
+                            let is_active = window.toplevel().map(|t| {
+                                let states = &t.current_state().states;
+                                states.contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated)
+                            }).unwrap_or(false) || (state.seat.get_keyboard().and_then(|k| k.current_focus()).as_ref() == main_surface.as_deref());
+
                             let root_id = main_surface.as_ref().map(|ms| {
                                 smithay::backend::renderer::element::Id::from_wayland_resource(ms.as_ref())
                             });
@@ -1524,8 +1547,12 @@ pub fn run_drm() -> Result<()> {
                             let should_round = win_phys_r.is_some() && !is_maximized_or_fullscreen;
                             let content_offset = geo.loc.to_physical_precise_round(scale);
                             let content_size = geo.size.to_physical_precise_round(scale);
+                            let win_screen_rect = Rectangle::new(
+                                (loc - output_geo.loc).to_physical_precise_round(scale),
+                                geo.size.to_physical_precise_round(scale),
+                            );
 
-                            window_render_data.push((root_id, elems, should_round, content_offset, content_size));
+                            window_render_data.push((root_id, win_surfaces, popup_elems, should_round, is_active, win_screen_rect, content_offset, content_size));
                         }
                     }
                 }
@@ -1543,12 +1570,28 @@ pub fn run_drm() -> Result<()> {
                             let _ = draw_render_elements(&mut frame, scale, &lower_elements, &[damage]);
                         }
 
-                        // 2. Renderizar cada ventana con esquinas squircle superelípticas (n=4.2) mediante shader UV local en GPU
-                        for (root_id, win_elems, should_round, content_offset, content_size) in &window_render_data {
+                        // Inicializar pipeline de sombras squircle si aún no existe
+                        if shadow_pipeline.is_none() {
+                            shadow_pipeline = frame.with_context(|gl| crate::shadow::WindowShadowPipeline::new(gl)).ok().flatten();
+                        }
+
+                        // 2. Renderizar superficies de cada ventana con sus sombras proyectadas y esquinas squircle
+                        for (root_id, win_elems, _popups, should_round, is_active, win_rect, content_offset, content_size) in &window_render_data {
                             if win_elems.is_empty() {
                                 continue;
                             }
 
+                            // 2.1. SOMBRA PROYECTADA (Window Drop Shadow con Squircle SDF n=4.2)
+                            // Se dibuja para ventanas no maximizadas inmediatamente antes de su superficie
+                            if *should_round {
+                                if let (Some(r), Some(ref shadow)) = (win_phys_r, shadow_pipeline.as_ref()) {
+                                    let _ = frame.with_context(|gl| {
+                                        shadow.render_shadow(gl, out_surface.size, *win_rect, r as f32, *is_active, scale);
+                                    });
+                                }
+                            }
+
+                            // 2.2. SUPERFICIES DE LA VENTANA (con recorte Squircle en raíz)
                             if *should_round {
                                 for elem in win_elems {
                                     let is_root = root_id.as_ref().map(|id| elem.id() == id).unwrap_or(true);
@@ -1660,6 +1703,13 @@ pub fn run_drm() -> Result<()> {
                                     }
                                 }
                             });
+                        }
+
+                        // 3. Renderizar menús contextuales y popups de ventanas (siempre ENCIMA de las superficies de ventana)
+                        for (_, _, popup_elems, ..) in &window_render_data {
+                            if !popup_elems.is_empty() {
+                                let _ = draw_render_elements(&mut frame, scale, popup_elems, &[damage]);
+                            }
                         }
 
                         // 4. Renderizar capas superiores translúcidas (Dock, Top Bar, Popovers)
