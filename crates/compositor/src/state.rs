@@ -150,6 +150,42 @@ pub fn toplevel_info(surface: &WlSurface) -> (Option<String>, Option<String>) {
     })
 }
 
+/// Identifica si una ventana pertenece a Firefox (para aplicar recorte squircle a subsuperficies
+/// y redimensión del lado del servidor sin interferir con ventanas GTK o Electron).
+pub fn is_firefox_window(window: &smithay::desktop::Window) -> bool {
+    if let Some(surface) = window.wl_surface() {
+        let (app_id, title) = toplevel_info(&surface);
+        if let Some(ref id) = app_id {
+            let lower = id.to_lowercase();
+            if lower.contains("firefox") || lower.contains("mozilla") {
+                return true;
+            }
+        }
+        if let Some(ref title) = title {
+            let lower = title.to_lowercase();
+            if lower.contains("firefox") || lower.contains("mozilla") {
+                return true;
+            }
+        }
+    }
+    if let Some(toplevel) = window.toplevel() {
+        let (app_id, title) = toplevel_info(toplevel.wl_surface());
+        if let Some(ref id) = app_id {
+            let lower = id.to_lowercase();
+            if lower.contains("firefox") || lower.contains("mozilla") {
+                return true;
+            }
+        }
+        if let Some(ref title) = title {
+            let lower = title.to_lowercase();
+            if lower.contains("firefox") || lower.contains("mozilla") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnapMode {
     LeftHalf,

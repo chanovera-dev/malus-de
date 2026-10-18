@@ -571,6 +571,40 @@ pub fn run_winit() -> Result<()> {
                             // Si Super o Alt está presionado y es clic izquierdo (0x110 = BTN_LEFT): arrastrar ventana inmediatamente desde cualquier punto
                             let has_super = keyboard.modifier_state().logo;
                             let has_alt = keyboard.modifier_state().alt;
+
+                            // Detección perimetral de redimensión del lado del servidor (8 px) con Clic Izquierdo (0x110 = BTN_LEFT)
+                            // APLICADO EXCLUSIVAMENTE A FIREFOX (para no alterar umbrales ni controles en ventanas GTK/Electron)
+                            if event.button_code() == 0x110 && !has_super && !has_alt {
+                                if let Some((resize_win, edge, win_loc)) = crate::grabs::find_window_resize_edge_under(&state.space, point, 8.0) {
+                                    let was_already_top = state.space.elements().last().map(|w| w == &resize_win).unwrap_or(false);
+                                    if !was_already_top {
+                                        state.space.raise_element(&resize_win, true);
+                                    }
+                                    if let Some(surface) = resize_win.wl_surface() {
+                                        if keyboard.current_focus().as_ref() != Some(surface.as_ref()) {
+                                            keyboard.set_focus(&mut state, Some(surface.clone().into_owned()), btn_serial);
+                                            state.notify_active_app(Some(&surface));
+                                        }
+                                    }
+                                    let start_data = smithay::input::pointer::GrabStartData {
+                                        focus: None,
+                                        button: event.button_code(),
+                                        location: point,
+                                    };
+                                    let initial_window_size = resize_win.geometry().size;
+                                    let grab = crate::grabs::ResizeSurfaceGrab {
+                                        start_data,
+                                        window: resize_win.clone(),
+                                        edges: edge,
+                                        initial_window_location: win_loc,
+                                        initial_window_size,
+                                        last_window_size: initial_window_size,
+                                    };
+                                    pointer.set_grab(&mut state, grab, btn_serial, smithay::input::pointer::Focus::Clear);
+                                    info!("📐 [ServerResize] Redimensión perimetral activada para Firefox: edge={:?}, win={:?}", edge, resize_win.geometry());
+                                }
+                            }
+
                             if (has_super || has_alt) && event.button_code() == 0x110 {
                                 info!("🚀 Atajo Super/Alt + Clic: iniciando arrastre directo de ventana desde {:?}", loc);
                                 let initial_window_location = loc;
@@ -822,6 +856,7 @@ pub fn run_winit() -> Result<()> {
                                 states.contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated)
                             }).unwrap_or(false) || (state.seat.get_keyboard().and_then(|k| k.current_focus()).as_ref() == Some(main_surface.as_ref()));
 
+                            let is_firefox = crate::state::is_firefox_window(&window);
                             let root_id = smithay::backend::renderer::element::Id::from_wayland_resource(main_surface.as_ref());
                             let should_round = win_phys_r.is_some() && !is_fullscreen;
                             let content_offset = geo.loc.to_physical_precise_round(1.0);
@@ -831,7 +866,7 @@ pub fn run_winit() -> Result<()> {
                                 geo.size.to_physical_precise_round(1.0),
                             );
 
-                            window_render_data.push((root_id, win_surfaces, popup_elems, should_round, is_active, win_screen_rect, content_offset, content_size));
+                            window_render_data.push((root_id, win_surfaces, popup_elems, should_round, is_active, win_screen_rect, content_offset, content_size, is_firefox));
                         }
                     }
                 }
@@ -856,7 +891,7 @@ pub fn run_winit() -> Result<()> {
                     let projection = *frame.projection();
 
                     // 2. Renderizar superficies de cada ventana con sus sombras proyectadas y esquinas squircle
-                    for (root_id, win_elems, _popups, should_round, is_active, win_rect, content_offset, content_size) in &window_render_data {
+                    for (root_id, win_elems, _popups, should_round, is_active, win_rect, content_offset, content_size, is_firefox) in &window_render_data {
                         if win_elems.is_empty() {
                             continue;
                         }
@@ -871,21 +906,44 @@ pub fn run_winit() -> Result<()> {
                             }
                         }
 
-                        // 2.2. SUPERFICIES DE LA VENTANA (con recorte Squircle en raíz)
+                        // 2.2. SUPERFICIES DE LA VENTANA (con recorte Squircle)
                         if *should_round {
-                            for elem in win_elems {
-                                let is_root = elem.id() == root_id;
-                                if is_root {
-                                    if let (Some(r), Some(ref shader)) = (win_phys_r, window_squircle_shader.as_ref()) {
+                            if *is_firefox {
+                                // Para Firefox: se aplica el shader a todo el árbol de subsuperficies (WebRender)
+                                // para evitar esquinas cuadradas en el contenido web interno
+                                if let (Some(r), Some(ref shader)) = (win_phys_r, window_squircle_shader.as_ref()) {
+                                    for elem in win_elems {
                                         let elem_geo = elem.geometry(smithay::utils::Scale::from(1.0));
-                                        shader.apply_to_frame(&mut frame, elem_geo.size, *content_offset, *content_size, r);
+                                        let sub_offset = smithay::utils::Point::from((
+                                            win_rect.loc.x - elem_geo.loc.x,
+                                            win_rect.loc.y - elem_geo.loc.y,
+                                        ));
+                                        shader.apply_to_frame(&mut frame, elem_geo.size, sub_offset, win_rect.size, r);
+
+                                        let _ = draw_render_elements(&mut frame, 1.0, std::slice::from_ref(elem), &[damage]);
+
+                                        frame.clear_tex_program_override();
                                     }
+                                } else {
+                                    let _ = draw_render_elements(&mut frame, 1.0, win_elems, &[damage]);
                                 }
+                            } else {
+                                // Para las demás apps (GTK, Electron, etc.): comportamiento intacto original,
+                                // SOLO se aplica el recorte a la superficie raíz para no distorsionar widgets GTK
+                                for elem in win_elems {
+                                    let is_root = elem.id() == root_id;
+                                    if is_root {
+                                        if let (Some(r), Some(ref shader)) = (win_phys_r, window_squircle_shader.as_ref()) {
+                                            let elem_geo = elem.geometry(smithay::utils::Scale::from(1.0));
+                                            shader.apply_to_frame(&mut frame, elem_geo.size, *content_offset, *content_size, r);
+                                        }
+                                    }
 
-                                let _ = draw_render_elements(&mut frame, 1.0, std::slice::from_ref(elem), &[damage]);
+                                    let _ = draw_render_elements(&mut frame, 1.0, std::slice::from_ref(elem), &[damage]);
 
-                                if is_root {
-                                    frame.clear_tex_program_override();
+                                    if is_root {
+                                        frame.clear_tex_program_override();
+                                    }
                                 }
                             }
                         } else {

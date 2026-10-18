@@ -6,7 +6,7 @@ use smithay::{
         GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent,
         GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle, RelativeMotionEvent,
     },
-    reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge,
+    reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::{ResizeEdge, State as XdgState},
     utils::{Logical, Point, Rectangle, Size},
     wayland::seat::WaylandFocus,
 };
@@ -563,4 +563,89 @@ pub fn preview_for_snap(
         crate::state::SnapMode::CenterRestore => None,
     }
 }
+
+/// Determina si un punto global de ratón cae dentro de la zona de borde perimetral de redimensión (8 px) de una ventana.
+/// NOTA IMPORTANTE: Para no interferir con aplicaciones GTK/Electron (que manejan su propia redimensión y controles),
+/// esta detección del lado del servidor se aplica EXCLUSIVAMENTE a Firefox.
+pub fn check_window_resize_edge(
+    window: &Window,
+    loc: Point<i32, Logical>,
+    point: Point<f64, Logical>,
+    thickness: f64,
+) -> Option<ResizeEdge> {
+    // Solo aplicar a Firefox; las ventanas GTK y Electron gestionan sus propios bordes y botones sin interferencias
+    if !crate::state::is_firefox_window(window) {
+        return None;
+    }
+
+    let is_maximized_or_fullscreen = window.toplevel().map(|t| {
+        let states = &t.current_state().states;
+        states.contains(XdgState::Fullscreen) || states.contains(XdgState::Maximized)
+    }).unwrap_or(false);
+
+    if is_maximized_or_fullscreen {
+        return None;
+    }
+
+    let geo = window.geometry();
+    if geo.size.w <= 0 || geo.size.h <= 0 {
+        return None;
+    }
+
+    let win_x = (loc.x + geo.loc.x) as f64;
+    let win_y = (loc.y + geo.loc.y) as f64;
+    let win_w = geo.size.w as f64;
+    let win_h = geo.size.h as f64;
+
+    let rel_x = point.x - win_x;
+    let rel_y = point.y - win_y;
+
+    // Fuera de los límites exteriores extendidos por thickness
+    if rel_x < -thickness || rel_x > win_w + thickness || rel_y < -thickness || rel_y > win_h + thickness {
+        return None;
+    }
+
+    let on_left = rel_x <= thickness;
+    let on_right = rel_x >= win_w - thickness;
+    let on_top = rel_y <= thickness;
+    let on_bottom = rel_y >= win_h - thickness;
+
+    if !on_left && !on_right && !on_top && !on_bottom {
+        return None;
+    }
+
+    // Proteger zona de controles de ventana (semáforo macOS en esquina superior izquierda x in [8, 72])
+    // para garantizar que los clics en los botones de cerrar/minimizar/maximizar nunca se confundan con resize
+    if on_top && rel_x > thickness && rel_x < 72.0 {
+        return None;
+    }
+
+    match (on_left, on_right, on_top, on_bottom) {
+        (true, _, true, _) => Some(ResizeEdge::TopLeft),
+        (_, true, true, _) => Some(ResizeEdge::TopRight),
+        (true, _, _, true) => Some(ResizeEdge::BottomLeft),
+        (_, true, _, true) => Some(ResizeEdge::BottomRight),
+        (true, _, _, _) => Some(ResizeEdge::Left),
+        (_, true, _, _) => Some(ResizeEdge::Right),
+        (_, _, true, _) => Some(ResizeEdge::Top),
+        (_, _, _, true) => Some(ResizeEdge::Bottom),
+        _ => None,
+    }
+}
+
+/// Busca en la pila Z de ventanas si el punto del cursor se encuentra sobre el borde de redimensión de alguna ventana visible.
+pub fn find_window_resize_edge_under(
+    space: &smithay::desktop::Space<Window>,
+    point: Point<f64, Logical>,
+    thickness: f64,
+) -> Option<(Window, ResizeEdge, Point<i32, Logical>)> {
+    for window in space.elements().rev() {
+        let Some(loc) = space.element_location(window) else { continue };
+        if let Some(edge) = check_window_resize_edge(window, loc, point, thickness) {
+            return Some((window.clone(), edge, loc));
+        }
+    }
+    None
+}
+
 
