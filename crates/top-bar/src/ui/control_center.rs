@@ -2208,6 +2208,17 @@ async fn update_bluetooth_ui_async(btn: &Button, icon: &Image, sub: &Label) {
 }
 
 fn is_dark_mode_enabled() -> bool {
+    if let Ok(out) = Command::new("dconf")
+        .args(["read", "/org/gnome/desktop/interface/color-scheme"])
+        .output()
+    {
+        let s = String::from_utf8_lossy(&out.stdout);
+        if s.contains("prefer-dark") {
+            return true;
+        } else if s.contains("prefer-light") {
+            return false;
+        }
+    }
     if let Ok(out) = Command::new("gsettings")
         .args(["get", "org.gnome.desktop.interface", "color-scheme"])
         .output()
@@ -2222,58 +2233,10 @@ pub fn apply_system_appearance_mode(to_dark: bool) {
     let target = if to_dark { "prefer-dark" } else { "prefer-light" };
     info!("🎨 Aplicando modo de apariencia del sistema: {}", target);
 
-    // 1. GSettings
-    let _ = Command::new("gsettings")
-        .args(["set", "org.gnome.desktop.interface", "color-scheme", target])
-        .status();
+    // 1. Sincronizar atómicamente dconf, gsettings, keyfile, settings.ini y gtk.css
+    malus_de_common::config::sync_system_appearance(to_dark);
 
-    // 2. Sincronizar en keyfile de sesión aislada (~/.config/malus-de/glib-2.0/settings/keyfile)
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let keyfile_path = std::path::PathBuf::from(&home).join(".config/malus-de/glib-2.0/settings/keyfile");
-    if keyfile_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&keyfile_path) {
-            let replaced = if content.contains("color-scheme=") {
-                content
-                    .replace("color-scheme='prefer-light'", &format!("color-scheme='{}'", target))
-                    .replace("color-scheme='prefer-dark'", &format!("color-scheme='{}'", target))
-            } else {
-                content
-            };
-            let _ = std::fs::write(&keyfile_path, replaced);
-        }
-    }
-
-    // 3. Sincronizar gtk-3.0 y gtk-4.0 settings.ini
-    let dark_val = if to_dark { "1" } else { "0" };
-    let ini_paths = [
-        std::path::PathBuf::from(&home).join(".config/malus-de/gtk-3.0/settings.ini"),
-        std::path::PathBuf::from(&home).join(".config/malus-de/gtk-4.0/settings.ini"),
-        std::path::PathBuf::from(&home).join(".config/gtk-3.0/settings.ini"),
-        std::path::PathBuf::from(&home).join(".config/gtk-4.0/settings.ini"),
-    ];
-
-    for path in &ini_paths {
-        if path.exists() {
-            if let Ok(content) = std::fs::read_to_string(path) {
-                let mut lines: Vec<String> = Vec::new();
-                let mut found_dark = false;
-                for line in content.lines() {
-                    if line.starts_with("gtk-application-prefer-dark-theme=") {
-                        lines.push(format!("gtk-application-prefer-dark-theme={}", dark_val));
-                        found_dark = true;
-                    } else {
-                        lines.push(line.to_string());
-                    }
-                }
-                if !found_dark {
-                    lines.push(format!("gtk-application-prefer-dark-theme={}", dark_val));
-                }
-                let _ = std::fs::write(path, lines.join("\n") + "\n");
-            }
-        }
-    }
-
-    // 4. Actualizar AdwStyleManager in-process
+    // 2. Actualizar AdwStyleManager in-process
     libadwaita::StyleManager::default().set_color_scheme(
         if to_dark {
             libadwaita::ColorScheme::ForceDark
@@ -2282,7 +2245,7 @@ pub fn apply_system_appearance_mode(to_dark: bool) {
         }
     );
 
-    // 5. Notificar a otros módulos mediante IPC
+    // 3. Notificar a otros módulos mediante IPC
     let _ = malus_de_common::ipc::IpcClient::send_command(
         malus_de_common::ipc::IpcMessage::ThemeChanged {
             theme_name: "macOS".to_string(),

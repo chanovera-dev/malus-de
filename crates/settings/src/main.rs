@@ -93,22 +93,66 @@ fn load_macos_settings_css() {
     let provider = CssProvider::new();
     let css = r#"
         window.macos-settings-window {
-            background-color: @view_bg_color;
+            background-color: transparent;
             color: @window_fg_color;
             border-radius: 0px;
             box-shadow: none;
         }
 
+        overlay-split-view {
+            background-color: transparent;
+        }
+
+        .sidebar-pane,
+        overlay-split-view > .sidebar-pane {
+            background-color: rgba(246, 246, 248, 0.82);
+            box-shadow: inset -1px 0 rgba(0, 0, 0, 0.08);
+        }
+
+        .sidebar-pane:backdrop,
+        overlay-split-view > .sidebar-pane:backdrop {
+            background-color: rgba(240, 240, 242, 0.88);
+        }
+
+        @media (prefers-color-scheme: dark) {
+            .sidebar-pane,
+            overlay-split-view > .sidebar-pane {
+                background-color: rgba(30, 30, 34, 0.82);
+                box-shadow: inset -1px 0 rgba(255, 255, 255, 0.08);
+            }
+
+            .sidebar-pane:backdrop,
+            overlay-split-view > .sidebar-pane:backdrop {
+                background-color: rgba(25, 25, 28, 0.88);
+            }
+        }
+
         .macos-sidebar {
-            background-color: @sidebar_bg_color;
-            border-right: 1px solid @borders;
+            background-color: transparent;
+            background: transparent;
+            border-right: none;
             padding: 0px;
+        }
+
+        .macos-sidebar scrolledwindow,
+        .macos-sidebar scrolledwindow > viewport,
+        .macos-sidebar viewport,
+        .macos-sidebar listview,
+        .macos-sidebar list,
+        .macos-sidebar .sidebar-body {
+            background-color: transparent;
+            background: transparent;
+            border-color: transparent;
+            box-shadow: none;
         }
 
         .sidebar-windowcontrols {
             min-height: 47px;
             padding: 0px 9px;
-            background-color: @sidebar_bg_color;
+            background-color: transparent;
+            background: transparent;
+            border-color: transparent;
+            box-shadow: none;
         }
 
         .sidebar-body {
@@ -2415,6 +2459,17 @@ fn get_current_cursor_config() -> (String, u32) {
 }
 
 fn is_dark_mode_active() -> bool {
+    if let Ok(out) = Command::new("dconf")
+        .args(["read", "/org/gnome/desktop/interface/color-scheme"])
+        .output()
+    {
+        let s = String::from_utf8_lossy(&out.stdout);
+        if s.contains("prefer-dark") {
+            return true;
+        } else if s.contains("prefer-light") {
+            return false;
+        }
+    }
     if let Ok(out) = Command::new("gsettings")
         .args(["get", "org.gnome.desktop.interface", "color-scheme"])
         .output()
@@ -2460,124 +2515,7 @@ fn set_system_appearance_mode(to_dark: bool) {
     let target = if to_dark { "prefer-dark" } else { "prefer-light" };
     tracing::info!("🎨 Cambiando modo de apariencia del sistema: {}", target);
 
-    let _ = Command::new("gsettings")
-        .args(["set", "org.gnome.desktop.interface", "color-scheme", target])
-        .status();
-
-    let _ = Command::new("gsettings")
-        .args(["set", "org.gnome.desktop.interface", "gtk-theme", "Adwaita"])
-        .status();
-
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let keyfile_path = PathBuf::from(&home).join(".config/malus-de/glib-2.0/settings/keyfile");
-    if keyfile_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&keyfile_path) {
-            let mut lines = Vec::new();
-            let mut found_color = false;
-            let mut found_theme = false;
-            for line in content.lines() {
-                if line.starts_with("color-scheme=") {
-                    lines.push(format!("color-scheme='{}'", target));
-                    found_color = true;
-                } else if line.starts_with("gtk-theme=") {
-                    lines.push("gtk-theme='Adwaita'".to_string());
-                    found_theme = true;
-                } else {
-                    lines.push(line.to_string());
-                }
-            }
-            if !found_color {
-                lines.push(format!("color-scheme='{}'", target));
-            }
-            if !found_theme {
-                lines.push("gtk-theme='Adwaita'".to_string());
-            }
-            let _ = std::fs::write(&keyfile_path, lines.join("\n") + "\n");
-        }
-    }
-
-    let dark_val = if to_dark { "1" } else { "0" };
-    let ini_paths = [
-        format!("{}/.config/malus-de/gtk-3.0/settings.ini", home),
-        format!("{}/.config/malus-de/gtk-4.0/settings.ini", home),
-        format!("{}/.config/gtk-3.0/settings.ini", home),
-        format!("{}/.config/gtk-4.0/settings.ini", home),
-    ];
-
-    for path_str in &ini_paths {
-        let path = PathBuf::from(path_str);
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                let mut lines: Vec<String> = Vec::new();
-                let mut found_dark = false;
-                let mut found_theme = false;
-                for line in content.lines() {
-                    if line.starts_with("gtk-application-prefer-dark-theme=") {
-                        lines.push(format!("gtk-application-prefer-dark-theme={}", dark_val));
-                        found_dark = true;
-                    } else if line.starts_with("gtk-theme-name=") {
-                        lines.push("gtk-theme-name=Adwaita".to_string());
-                        found_theme = true;
-                    } else {
-                        lines.push(line.to_string());
-                    }
-                }
-                if !found_dark {
-                    lines.push(format!("gtk-application-prefer-dark-theme={}", dark_val));
-                }
-                if !found_theme {
-                    lines.push("gtk-theme-name=Adwaita".to_string());
-                }
-                let _ = std::fs::write(&path, lines.join("\n") + "\n");
-            }
-        } else {
-            let (cursor_theme, cursor_sz) = get_current_cursor_config();
-            let content = format!(
-                "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme={}\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-theme-name=Adwaita\n",
-                dark_val, cursor_theme, cursor_sz
-            );
-            let _ = std::fs::write(&path, content);
-        }
-    }
-
-    // Actualizar hojas de estilo nativas Adwaita macOS
-    let light_css = malus_de_common::config::get_malus_gtk_css(false);
-    let dark_css = malus_de_common::config::get_malus_gtk_css(true);
-
-    let gtk3_paths = [
-        format!("{}/.config/gtk-3.0/gtk.css", home),
-        format!("{}/.config/malus-de/gtk-3.0/gtk.css", home),
-    ];
-    for p in &gtk3_paths {
-        let _ = std::fs::write(p, if to_dark { &dark_css } else { &light_css });
-    }
-
-    let gtk4_css_paths = [
-        format!("{}/.config/gtk-4.0/gtk.css", home),
-        format!("{}/.config/malus-de/gtk-4.0/gtk.css", home),
-    ];
-    for p in &gtk4_css_paths {
-        let _ = std::fs::write(p, if to_dark { &dark_css } else { &light_css });
-    }
-
-    let gtk4_dark_paths = [
-        format!("{}/.config/gtk-4.0/gtk-dark.css", home),
-        format!("{}/.config/malus-de/gtk-4.0/gtk-dark.css", home),
-    ];
-    for p in &gtk4_dark_paths {
-        let _ = std::fs::write(p, &dark_css);
-    }
-
-    // Sincronizar controles en navegadores (Firefox y Brave)
-    malus_de_common::config::configure_browsers_traffic_lights(&home);
-
-    // Notificar recarga en caliente tocando los archivos
-    for p in gtk4_css_paths.iter().chain(gtk4_dark_paths.iter()) {
-        let _ = Command::new("touch").arg(p).status();
-    }
+    malus_de_common::config::sync_system_appearance(to_dark);
 
     libadwaita::StyleManager::default().set_color_scheme(
         if to_dark {

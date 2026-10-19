@@ -1597,6 +1597,7 @@ pub fn run_drm() -> Result<()> {
                             }).unwrap_or(false) || (state.seat.get_keyboard().and_then(|k| k.current_focus()).as_ref() == Some(main_surface.as_ref()));
 
                             let is_firefox = crate::state::is_firefox_window(&window);
+                            let is_translucent = crate::state::is_translucent_window(&window);
                             let root_id = smithay::backend::renderer::element::Id::from_wayland_resource(main_surface.as_ref());
 
                             let should_round = win_phys_r.is_some() && !is_fullscreen;
@@ -1607,7 +1608,7 @@ pub fn run_drm() -> Result<()> {
                                 geo.size.to_physical_precise_round(scale),
                             );
 
-                            window_render_data.push((root_id, win_surfaces, popup_elems, should_round, is_active, win_screen_rect, content_offset, content_size, is_firefox));
+                            window_render_data.push((root_id, win_surfaces, popup_elems, should_round, is_active, win_screen_rect, content_offset, content_size, is_firefox, is_translucent));
                         }
                     }
                 }
@@ -1630,10 +1631,15 @@ pub fn run_drm() -> Result<()> {
                             shadow_pipeline = frame.with_context(|gl| crate::shadow::WindowShadowPipeline::new(gl)).ok().flatten();
                         }
 
+                        // Inicializar pipeline de desenfoque Dual Kawase si aún no existe
+                        if blur_pipeline.is_none() {
+                            blur_pipeline = frame.with_context(|gl| crate::blur::DualKawaseBlur::new(gl)).ok().flatten();
+                        }
+
                         let projection = *frame.projection();
 
-                        // 2. Renderizar superficies de cada ventana con sus sombras proyectadas y esquinas squircle
-                        for (root_id, win_elems, _popups, should_round, is_active, win_rect, content_offset, content_size, is_firefox) in &window_render_data {
+                        // 2. Renderizar superficies de cada ventana con sus sombras proyectadas, desenfoque de fondo y esquinas squircle
+                        for (root_id, win_elems, _popups, should_round, is_active, win_rect, content_offset, content_size, is_firefox, is_translucent) in &window_render_data {
                             if win_elems.is_empty() {
                                 continue;
                             }
@@ -1645,6 +1651,16 @@ pub fn run_drm() -> Result<()> {
                                     let _ = frame.with_context(|gl| {
                                         shadow.render_shadow(gl, &projection, *win_rect, r as f32, *is_active, scale);
                                     });
+                                }
+
+                                // 2.1.5. DESENFOQUE DE FONDO DUAL KAWASE (Exclusivo para Nautilus y Ajustes del Sistema)
+                                if *is_translucent {
+                                    if let (Some(r), Some(ref mut blur)) = (win_phys_r, blur_pipeline.as_mut()) {
+                                        let screen_size = out_surface.size;
+                                        let _ = frame.with_context(|gl| {
+                                            blur.render_blur(gl, &projection, screen_size, *win_rect, r as f32);
+                                        });
+                                    }
                                 }
                             }
 
@@ -1719,7 +1735,7 @@ pub fn run_drm() -> Result<()> {
                                             };
                                             if radius > 0.0 {
                                                 let phys_rect = geo.to_physical_precise_round(scale);
-                                                blur.render_blur(gl, screen_size, phys_rect, radius);
+                                                blur.render_blur(gl, &projection, screen_size, phys_rect, radius);
                                             }
 
                                             // Desenfocar popups / menús emergentes de esta capa (Apple menu, Control Center, etc.)
@@ -1744,7 +1760,7 @@ pub fn run_drm() -> Result<()> {
                                                 if popup_w > 0 && popup_h > 0 {
                                                     let popup_loc = geo.loc + (rel_loc - geo_rect.loc);
                                                     let popup_rect = Rectangle::new(popup_loc, (popup_w, popup_h).into()).to_physical_precise_round(scale);
-                                                    blur.render_blur(gl, screen_size, popup_rect, 14.0 * scale as f32);
+                                                    blur.render_blur(gl, &projection, screen_size, popup_rect, 14.0 * scale as f32);
                                                 }
                                             }
                                         }
@@ -1776,7 +1792,7 @@ pub fn run_drm() -> Result<()> {
                                                 if popup_w > 0 && popup_h > 0 {
                                                     let popup_loc = win_loc - output_geo.loc + (rel_loc - geo_rect.loc);
                                                     let popup_rect = Rectangle::new(popup_loc, (popup_w, popup_h).into()).to_physical_precise_round(scale);
-                                                    blur.render_blur(gl, screen_size, popup_rect, 14.0 * scale as f32);
+                                                    blur.render_blur(gl, &projection, screen_size, popup_rect, 14.0 * scale as f32);
                                                 }
                                             }
                                         }

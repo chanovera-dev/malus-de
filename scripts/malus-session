@@ -178,8 +178,10 @@ else
     echo "⚠️ Socket Wayland no detectado a tiempo, asumiendo WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
 fi
 
-# Actualizar el socket Wayland en el entorno de activación D-Bus
-dbus-update-activation-environment WAYLAND_DISPLAY GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND LD_PRELOAD 2>/dev/null || true
+# Actualizar el socket Wayland en el entorno de activación D-Bus y systemd
+dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND LD_PRELOAD 2>/dev/null || true
+systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_CONFIG_HOME GSETTINGS_BACKEND 2>/dev/null || true
+systemctl --user start xdg-desktop-portal 2>/dev/null || true
 
 # ------------------------------------------------------------------------------
 # 2. Iniciar Servicios y Componentes del Shell de Malus DE

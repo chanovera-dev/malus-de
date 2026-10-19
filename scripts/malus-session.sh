@@ -68,7 +68,9 @@ if [ -f "$HOME/.config/malus-de/lib/libmalus_gtk_layout.so" ]; then
 fi
 
 # Actualizar el entorno D-Bus con el display Wayland de Malus DE
-dbus-update-activation-environment WAYLAND_DISPLAY GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND LD_PRELOAD 2>/dev/null || true
+dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND LD_PRELOAD 2>/dev/null || true
+systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_CONFIG_HOME GSETTINGS_BACKEND 2>/dev/null || true
+systemctl --user start xdg-desktop-portal 2>/dev/null || true
 
 
 # 2. Iniciar Demonio de Fondo de Pantalla (Layer Background)

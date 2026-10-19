@@ -186,6 +186,44 @@ pub fn is_firefox_window(window: &smithay::desktop::Window) -> bool {
     false
 }
 
+/// Identifica si una ventana requiere desenfoque de fondo en GPU
+/// (restringido a Nautilus y Ajustes del Sistema para ahorrar el 100% de fillrate en apps opacas).
+pub fn is_translucent_window(window: &smithay::desktop::Window) -> bool {
+    let check = |app_id: &Option<String>, title: &Option<String>| -> bool {
+        if let Some(ref id) = app_id {
+            let lower = id.to_lowercase();
+            if lower.contains("nautilus")
+                || lower.contains("malus.settings")
+                || lower.contains("malus-de-settings")
+                || lower.contains("malus_de_settings")
+            {
+                return true;
+            }
+        }
+        if let Some(ref title) = title {
+            let lower = title.to_lowercase();
+            if lower.contains("ajustes del sistema") {
+                return true;
+            }
+        }
+        false
+    };
+
+    if let Some(surface) = window.wl_surface() {
+        let (app_id, title) = toplevel_info(&surface);
+        if check(&app_id, &title) {
+            return true;
+        }
+    }
+    if let Some(toplevel) = window.toplevel() {
+        let (app_id, title) = toplevel_info(toplevel.wl_surface());
+        if check(&app_id, &title) {
+            return true;
+        }
+    }
+    false
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnapMode {
     LeftHalf,

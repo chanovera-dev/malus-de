@@ -400,14 +400,471 @@ button.link:hover {
 }
 "#;
 
-/// Genera la hoja de estilos CSS completa de Malus DE (controles macOS + recortes squircle)
+pub const MALUS_GTK_CSS_SIDEBAR_COMMON: &str = r#"/* Malus DE - Paneles laterales semitransparentes estilo macOS (Sidebar / Split View) */
+window.background {
+    background-color: transparent;
+}
+
+/* Mantener fondo opaco sólido para vistas de contenido y ventanas generales */
+adw-toolbar-view,
+navigation-view,
+preferencespage,
+preferencesgroup,
+.content-pane {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+}
+
+.content-pane headerbar,
+navigation-split-view > .content-pane headerbar,
+overlay-split-view > .content-pane headerbar {
+    background-color: @headerbar_bg_color;
+}
+
+/* Diálogos modales y selectores de archivos/descargas: Fondo plano sólido estilo macOS */
+window.dialog,
+window.dialog.background,
+window.background.dialog,
+window.filechooser,
+window.filechooser.background,
+window.background.filechooser,
+window.messagedialog,
+window.messagedialog.background,
+window.background.messagedialog,
+window.modal,
+window.sheet,
+dialog,
+dialog.background,
+messagedialog,
+messagedialog.background,
+filechooser,
+filechooser.background,
+.file-chooser,
+.dialog-vbox,
+.dialog-content-area,
+.dialog-action-box,
+.dialog-action-area {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+}
+
+window.dialog headerbar,
+window.filechooser headerbar,
+dialog headerbar,
+filechooser headerbar {
+    background-color: @headerbar_bg_color;
+    color: @headerbar_fg_color;
+}
+
+window.dialog actionbar,
+window.dialog actionbar.background,
+window.filechooser actionbar,
+window.filechooser actionbar.background,
+dialog actionbar,
+dialog actionbar.background,
+filechooser actionbar,
+filechooser actionbar.background {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+}
+
+/* Barra lateral de lugares (placessidebar / navigation-sidebar / placesview) con fondo plano sólido en diálogos */
+window.dialog placessidebar,
+window.dialog placessidebar.view,
+window.dialog placessidebar scrolledwindow,
+window.dialog placessidebar viewport,
+window.dialog placessidebar listview,
+window.dialog placessidebar list,
+window.dialog placessidebar listbox,
+window.dialog placessidebar .view,
+window.dialog placesview,
+window.dialog placesview scrolledwindow,
+window.dialog placesview viewport,
+window.dialog placesview list,
+window.dialog placesview stack,
+window.filechooser placessidebar,
+window.filechooser placessidebar.view,
+window.filechooser placessidebar scrolledwindow,
+window.filechooser placessidebar viewport,
+window.filechooser placessidebar listview,
+window.filechooser placessidebar list,
+window.filechooser placessidebar listbox,
+window.filechooser placessidebar .view,
+window.filechooser placesview,
+window.filechooser placesview scrolledwindow,
+window.filechooser placesview viewport,
+window.filechooser placesview list,
+window.filechooser placesview stack,
+dialog placessidebar,
+dialog placessidebar.view,
+dialog placessidebar scrolledwindow,
+dialog placessidebar viewport,
+dialog placessidebar listview,
+dialog placessidebar list,
+dialog placessidebar listbox,
+dialog placessidebar .view,
+dialog placesview,
+dialog placesview scrolledwindow,
+dialog placesview viewport,
+dialog placesview list,
+dialog placesview stack,
+filechooser placessidebar,
+filechooser placessidebar.view,
+filechooser placessidebar scrolledwindow,
+filechooser placessidebar viewport,
+filechooser placessidebar listview,
+filechooser placessidebar list,
+filechooser placessidebar listbox,
+filechooser placessidebar .view,
+filechooser placesview,
+filechooser placesview scrolledwindow,
+filechooser placesview viewport,
+filechooser placesview list,
+filechooser placesview stack,
+window.dialog .navigation-sidebar,
+window.filechooser .navigation-sidebar,
+dialog .navigation-sidebar,
+filechooser .navigation-sidebar {
+    background: @window_bg_color;
+    background-color: @window_bg_color;
+}
+
+/* Transparencia total en todos los componentes internos de la columna izquierda (Sidebar)
+   para que la topbar y el contenido compartan exactamente el mismo fondo homogéneo sin costuras */
+.sidebar-pane toolbarview,
+navigation-split-view > .sidebar-pane toolbarview,
+overlay-split-view > .sidebar-pane toolbarview,
+.sidebar-pane adw-toolbar-view,
+navigation-split-view > .sidebar-pane adw-toolbar-view,
+overlay-split-view > .sidebar-pane adw-toolbar-view,
+.sidebar-pane toolbarview > .top-bar,
+.sidebar-pane toolbarview > .top-bar.raised,
+.sidebar-pane toolbarview > .top-bar revealer,
+.sidebar-pane toolbarview > .bottom-bar,
+.sidebar-pane toolbarview > .bottom-bar.raised,
+.sidebar-pane revealer.top-bar,
+.sidebar-pane revealer.top-bar > windowhandle,
+.sidebar-pane revealer.top-bar box,
+navigation-split-view > .sidebar-pane toolbarview > .top-bar,
+navigation-split-view > .sidebar-pane toolbarview > .top-bar.raised,
+overlay-split-view > .sidebar-pane toolbarview > .top-bar,
+overlay-split-view > .sidebar-pane toolbarview > .top-bar.raised,
+overlay-split-view > .sidebar-pane revealer.top-bar,
+overlay-split-view > .sidebar-pane revealer.top-bar > windowhandle,
+overlay-split-view > .sidebar-pane revealer.top-bar box,
+.sidebar-pane headerbar,
+.sidebar-pane headerbar:backdrop,
+.sidebar-pane headerbar.flat,
+navigation-split-view > .sidebar-pane headerbar,
+overlay-split-view > .sidebar-pane headerbar,
+.sidebar-pane headerbar > windowhandle,
+navigation-split-view > .sidebar-pane headerbar > windowhandle,
+overlay-split-view > .sidebar-pane headerbar > windowhandle,
+.sidebar-pane headerbar > windowhandle > box,
+navigation-split-view > .sidebar-pane headerbar > windowhandle > box,
+overlay-split-view > .sidebar-pane headerbar > windowhandle > box,
+.sidebar-windowcontrols,
+.macos-sidebar .sidebar-windowcontrols,
+.sidebar-pane .macos-sidebar,
+.sidebar-pane > .macos-sidebar,
+navigation-split-view > .sidebar-pane .macos-sidebar,
+overlay-split-view > .sidebar-pane .macos-sidebar,
+.sidebar-pane scrolledwindow,
+.sidebar-pane scrolledwindow > viewport,
+.sidebar-pane viewport,
+.sidebar-pane listview,
+.sidebar-pane list,
+.sidebar-pane listbox,
+.sidebar-pane treeview,
+.sidebar-pane .view,
+navigation-split-view > .sidebar-pane scrolledwindow,
+navigation-split-view > .sidebar-pane scrolledwindow > viewport,
+navigation-split-view > .sidebar-pane viewport,
+navigation-split-view > .sidebar-pane listview,
+navigation-split-view > .sidebar-pane list,
+navigation-split-view > .sidebar-pane listbox,
+navigation-split-view > .sidebar-pane treeview,
+navigation-split-view > .sidebar-pane .view,
+overlay-split-view > .sidebar-pane scrolledwindow,
+overlay-split-view > .sidebar-pane scrolledwindow > viewport,
+overlay-split-view > .sidebar-pane viewport,
+overlay-split-view > .sidebar-pane listview,
+overlay-split-view > .sidebar-pane list,
+overlay-split-view > .sidebar-pane listbox,
+overlay-split-view > .sidebar-pane treeview,
+overlay-split-view > .sidebar-pane .view,
+.navigation-sidebar,
+.navigation-sidebar.view,
+.navigation-sidebar scrolledwindow,
+.navigation-sidebar scrolledwindow > viewport,
+.navigation-sidebar viewport,
+.navigation-sidebar listview,
+.navigation-sidebar list,
+.navigation-sidebar listbox,
+.navigation-sidebar .view,
+placessidebar,
+placessidebar.view,
+placessidebar scrolledwindow,
+placessidebar scrolledwindow > viewport,
+placessidebar viewport,
+placessidebar listview,
+placessidebar list,
+placessidebar listbox,
+placessidebar .view,
+.macos-sidebar,
+.macos-sidebar scrolledwindow,
+.macos-sidebar scrolledwindow > viewport,
+.macos-sidebar viewport,
+.macos-sidebar listview,
+.macos-sidebar list,
+.macos-sidebar listbox,
+.macos-sidebar .sidebar-body {
+    background: transparent;
+    background-color: transparent;
+    border-color: transparent;
+    box-shadow: none;
+}
+
+.sidebar-pane listview > row,
+.sidebar-pane list > row,
+.sidebar-pane listbox > row,
+navigation-split-view > .sidebar-pane listview > row,
+navigation-split-view > .sidebar-pane list > row,
+navigation-split-view > .sidebar-pane listbox > row,
+overlay-split-view > .sidebar-pane listview > row,
+overlay-split-view > .sidebar-pane list > row,
+overlay-split-view > .sidebar-pane listbox > row,
+.navigation-sidebar row,
+.navigation-sidebar > row,
+placessidebar row,
+placessidebar > row {
+    background: transparent;
+    background-color: transparent;
+}
+
+.sidebar-pane listview > row:hover,
+navigation-split-view > .sidebar-pane listview > row:hover,
+overlay-split-view > .sidebar-pane listview > row:hover,
+.navigation-sidebar row:hover,
+placessidebar row:hover {
+    background-color: alpha(currentColor, 0.08);
+}
+
+.sidebar-pane listview > row:selected,
+navigation-split-view > .sidebar-pane listview > row:selected,
+overlay-split-view > .sidebar-pane listview > row:selected,
+.navigation-sidebar row:selected,
+placessidebar row:selected {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+}
+"#;
+
+pub const MALUS_GTK_CSS_SIDEBAR_LIGHT: &str = r#"/* Estilos de panel lateral para Tema Claro */
+@define-color sidebar_bg_color rgba(246, 246, 248, 0.82);
+@define-color sidebar_backdrop_color rgba(240, 240, 242, 0.88);
+
+:root {
+    --sidebar-bg-color: rgba(246, 246, 248, 0.82);
+    --sidebar-backdrop-color: rgba(240, 240, 242, 0.88);
+}
+
+.sidebar-pane,
+navigation-split-view > .sidebar-pane,
+overlay-split-view > .sidebar-pane,
+.macos-sidebar {
+    background-color: rgba(246, 246, 248, 0.82);
+    color: @window_fg_color;
+}
+
+.sidebar-pane:backdrop,
+navigation-split-view > .sidebar-pane:backdrop,
+overlay-split-view > .sidebar-pane:backdrop,
+.macos-sidebar:backdrop {
+    background-color: rgba(240, 240, 242, 0.88);
+}
+
+.sidebar-pane:dir(ltr),
+navigation-split-view > .sidebar-pane:dir(ltr),
+overlay-split-view > .sidebar-pane:dir(ltr),
+.macos-sidebar:dir(ltr) {
+    box-shadow: inset -1px 0 rgba(0, 0, 0, 0.08);
+}
+
+.sidebar-pane:dir(rtl),
+navigation-split-view > .sidebar-pane:dir(rtl),
+overlay-split-view > .sidebar-pane:dir(rtl),
+.macos-sidebar:dir(rtl) {
+    box-shadow: inset 1px 0 rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+    .sidebar-pane,
+    navigation-split-view > .sidebar-pane,
+    overlay-split-view > .sidebar-pane,
+    .macos-sidebar {
+        background-color: rgba(30, 30, 34, 0.82);
+        color: @window_fg_color;
+    }
+
+    .sidebar-pane:backdrop,
+    navigation-split-view > .sidebar-pane:backdrop,
+    overlay-split-view > .sidebar-pane:backdrop,
+    .macos-sidebar:backdrop {
+        background-color: rgba(25, 25, 28, 0.88);
+    }
+
+    .sidebar-pane:dir(ltr),
+    navigation-split-view > .sidebar-pane:dir(ltr),
+    overlay-split-view > .sidebar-pane:dir(ltr),
+    .macos-sidebar:dir(ltr) {
+        box-shadow: inset -1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    .sidebar-pane:dir(rtl),
+    navigation-split-view > .sidebar-pane:dir(rtl),
+    overlay-split-view > .sidebar-pane:dir(rtl),
+    .macos-sidebar:dir(rtl) {
+        box-shadow: inset 1px 0 rgba(255, 255, 255, 0.08);
+    }
+}
+"#;
+
+pub const MALUS_GTK_CSS_SIDEBAR_DARK: &str = r#"/* Estilos de panel lateral para Tema Oscuro */
+@define-color sidebar_bg_color rgba(30, 30, 34, 0.82);
+@define-color sidebar_backdrop_color rgba(25, 25, 28, 0.88);
+
+:root {
+    --sidebar-bg-color: rgba(30, 30, 34, 0.82);
+    --sidebar-backdrop-color: rgba(25, 25, 28, 0.88);
+}
+
+.sidebar-pane,
+navigation-split-view > .sidebar-pane,
+overlay-split-view > .sidebar-pane,
+.macos-sidebar {
+    background-color: rgba(30, 30, 34, 0.82);
+    color: @window_fg_color;
+}
+
+.sidebar-pane:backdrop,
+navigation-split-view > .sidebar-pane:backdrop,
+overlay-split-view > .sidebar-pane:backdrop,
+.macos-sidebar:backdrop {
+    background-color: rgba(25, 25, 28, 0.88);
+}
+
+.sidebar-pane:dir(ltr),
+navigation-split-view > .sidebar-pane:dir(ltr),
+overlay-split-view > .sidebar-pane:dir(ltr),
+.macos-sidebar:dir(ltr) {
+    box-shadow: inset -1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.sidebar-pane:dir(rtl),
+navigation-split-view > .sidebar-pane:dir(rtl),
+overlay-split-view > .sidebar-pane:dir(rtl),
+.macos-sidebar:dir(rtl) {
+    box-shadow: inset 1px 0 rgba(255, 255, 255, 0.08);
+}
+"#;
+
+/// Genera la hoja de estilos CSS completa de Malus DE (controles macOS + recortes squircle + paneles translúcidos) para GTK 4 / Libadwaita
 pub fn get_malus_gtk_css(dark: bool) -> String {
-    let controls = if dark {
-        MALUS_GTK_CSS_WINDOWCONTROLS_DARK
+    let (controls, sidebar) = if dark {
+        (MALUS_GTK_CSS_WINDOWCONTROLS_DARK, MALUS_GTK_CSS_SIDEBAR_DARK)
     } else {
-        MALUS_GTK_CSS_WINDOWCONTROLS_LIGHT
+        (MALUS_GTK_CSS_WINDOWCONTROLS_LIGHT, MALUS_GTK_CSS_SIDEBAR_LIGHT)
     };
-    format!("{}\n{}", controls, MALUS_GTK_CSS_SQUIRCLE_RULES)
+    format!("{}\n{}\n{}\n{}", controls, MALUS_GTK_CSS_SQUIRCLE_RULES, MALUS_GTK_CSS_SIDEBAR_COMMON, sidebar)
+}
+
+/// Hoja de estilos CSS nativa y válida para GTK 3 (Firefox, LibreOffice, GIMP, diálogos GTK3)
+pub fn get_malus_gtk3_css(dark: bool) -> String {
+    let (bg_color, fg_color, sidebar_bg, border_color) = if dark {
+        ("rgb(30, 30, 34)", "rgb(255, 255, 255)", "rgba(30, 30, 34, 0.82)", "rgba(255, 255, 255, 0.08)")
+    } else {
+        ("rgb(246, 246, 248)", "rgb(0, 0, 0)", "rgba(246, 246, 248, 0.82)", "rgba(0, 0, 0, 0.08)")
+    };
+
+    format!(r#"/* Malus DE - Hoja de estilos GTK 3 nativa (macOS Style) */
+@define-color window_bg_color {bg_color};
+@define-color window_fg_color {fg_color};
+@define-color headerbar_bg_color {bg_color};
+@define-color headerbar_fg_color {fg_color};
+@define-color sidebar_bg_color {sidebar_bg};
+@define-color accent_bg_color @theme_selected_bg_color;
+@define-color accent_fg_color @theme_selected_fg_color;
+
+/* Controles de ventana macOS para GTK 3 */
+headerbar button.titlebutton.close,
+headerbar button.titlebutton.minimize,
+headerbar button.titlebutton.maximize {{
+    min-width: 13px;
+    min-height: 13px;
+    border-radius: 9999px;
+    padding: 0;
+    margin: 0 4px;
+}}
+
+/* Fondo plano sólido e impenetrable para diálogos modales y selectores de archivos en GTK 3 */
+dialog,
+dialog.background,
+dialog.csd,
+filechooser,
+.file-chooser,
+placesview,
+placesview.vertical,
+placesview frame,
+placesview stack,
+placesview scrolledwindow,
+placesview viewport,
+placesview list,
+placesview listbox,
+dialog placessidebar,
+dialog placessidebar.view,
+dialog placessidebar viewport,
+dialog placessidebar list,
+dialog placesview,
+filechooser placessidebar,
+filechooser placessidebar.view,
+filechooser placessidebar viewport,
+filechooser placessidebar list,
+filechooser placesview,
+.dialog-vbox,
+.dialog-content-area,
+.dialog-action-box,
+.dialog-action-area {{
+    background-color: @theme_bg_color;
+    color: @theme_fg_color;
+}}
+
+dialog headerbar,
+filechooser headerbar {{
+    background-color: @theme_bg_color;
+    color: @theme_fg_color;
+}}
+
+dialog actionbar,
+dialog actionbar.background,
+filechooser actionbar,
+filechooser actionbar.background {{
+    background-color: @theme_bg_color;
+    color: @theme_fg_color;
+}}
+
+/* Paneles laterales GTK 3 */
+placessidebar,
+placessidebar.view {{
+    background-color: {sidebar_bg};
+    box-shadow: inset -1px 0 {border_color};
+}}
+"#,
+        bg_color = bg_color,
+        fg_color = fg_color,
+        sidebar_bg = sidebar_bg,
+        border_color = border_color
+    )
 }
 
 /// Inicializa el entorno de configuración aislado para Malus DE en `$HOME/.config/malus-de`.
@@ -426,7 +883,7 @@ pub fn setup_isolated_session_environment() -> std::io::Result<PathBuf> {
 button-layout='close,minimize,maximize:'
 
 [org/gnome/desktop/interface]
-color-scheme='prefer-light'
+color-scheme='prefer-dark'
 cursor-theme='macOS'
 cursor-size=24
 icon-theme='Adwaita'
@@ -445,7 +902,7 @@ overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
     if !gtk3_ini.exists() {
         let gtk_ini_content = r#"[Settings]
 gtk-decoration-layout=close,minimize,maximize:
-gtk-application-prefer-dark-theme=0
+gtk-application-prefer-dark-theme=1
 gtk-cursor-theme-name=macOS
 gtk-cursor-theme-size=24
 gtk-theme-name=Adwaita
@@ -459,7 +916,7 @@ gtk-theme-name=Adwaita
     if !gtk4_ini.exists() {
         let gtk_ini_content = r#"[Settings]
 gtk-decoration-layout=close,minimize,maximize:
-gtk-application-prefer-dark-theme=0
+gtk-application-prefer-dark-theme=1
 gtk-cursor-theme-name=macOS
 gtk-cursor-theme-size=24
 gtk-theme-name=Adwaita
@@ -475,15 +932,29 @@ gtk-theme-name=Adwaita
 
     let light_css = get_malus_gtk_css(false);
     let dark_css = get_malus_gtk_css(true);
+    let light_gtk3_css = get_malus_gtk3_css(false);
+    let dark_gtk3_css = get_malus_gtk3_css(true);
+
+    let is_dark = if let Ok(out) = std::process::Command::new("dconf")
+        .args(["read", "/org/gnome/desktop/interface/color-scheme"])
+        .output()
+    {
+        String::from_utf8_lossy(&out.stdout).contains("prefer-dark")
+    } else {
+        true
+    };
+
+    let active_css = if is_dark { &dark_css } else { &light_css };
+    let active_gtk3 = if is_dark { &dark_gtk3_css } else { &light_gtk3_css };
 
     // GTK 3
-    let _ = std::fs::write(gtk3_dir.join("gtk.css"), &light_css);
-    let _ = std::fs::write(user_gtk3.join("gtk.css"), &light_css);
+    let _ = std::fs::write(gtk3_dir.join("gtk.css"), active_gtk3);
+    let _ = std::fs::write(user_gtk3.join("gtk.css"), active_gtk3);
 
     // GTK 4 (sesión Malus DE y usuario)
-    let _ = std::fs::write(gtk4_dir.join("gtk.css"), &light_css);
+    let _ = std::fs::write(gtk4_dir.join("gtk.css"), active_css);
     let _ = std::fs::write(gtk4_dir.join("gtk-dark.css"), &dark_css);
-    let _ = std::fs::write(user_gtk4.join("gtk.css"), &light_css);
+    let _ = std::fs::write(user_gtk4.join("gtk.css"), active_css);
     let _ = std::fs::write(user_gtk4.join("gtk-dark.css"), &dark_css);
 
     // 3. Biblioteca compartida para garantizar botones consistentes en GTK3/GTK4 (macOS style)
@@ -627,6 +1098,23 @@ void adw_window_title_set_title(void *self, const char *title) {
         }
     }
 
+    // 9. Asegurar que las variables de entorno de Wayland y Desktop estén en systemd y activar portal
+    let _ = std::process::Command::new("systemctl")
+        .args([
+            "--user",
+            "import-environment",
+            "WAYLAND_DISPLAY",
+            "DISPLAY",
+            "XDG_CURRENT_DESKTOP",
+            "XDG_SESSION_TYPE",
+            "XDG_CONFIG_HOME",
+            "GSETTINGS_BACKEND",
+        ])
+        .status();
+    let _ = std::process::Command::new("systemctl")
+        .args(["--user", "start", "xdg-desktop-portal"])
+        .status();
+
     // Exportar variables en el entorno del proceso actual
     std::env::set_var("XDG_CONFIG_HOME", &malus_config_dir);
     std::env::set_var("GSETTINGS_BACKEND", "keyfile");
@@ -634,6 +1122,146 @@ void adw_window_title_set_title(void *self, const char *title) {
     std::env::set_var("XCURSOR_SIZE", "24");
 
     Ok(malus_config_dir)
+}
+
+/// Sincroniza atómicamente el modo de apariencia (claro / oscuro) en todo el sistema:
+/// DConf (portal XDG/GNOME), GSettings, keyfile aislado, settings.ini (GTK3/GTK4),
+/// y regenera las hojas de estilo GTK CSS recargando en caliente las aplicaciones activas.
+pub fn sync_system_appearance(to_dark: bool) {
+    let target = if to_dark { "prefer-dark" } else { "prefer-light" };
+    let dark_val = if to_dark { "1" } else { "0" };
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+
+    // 1. DConf (portal XDG/GNOME y Libadwaita/Nautilus)
+    let _ = std::process::Command::new("dconf")
+        .args(["write", "/org/gnome/desktop/interface/color-scheme", &format!("'{}'", target)])
+        .status();
+
+    // 2. GSettings estándar
+    let _ = std::process::Command::new("gsettings")
+        .args(["set", "org.gnome.desktop.interface", "color-scheme", target])
+        .status();
+    let _ = std::process::Command::new("gsettings")
+        .args(["set", "org.gnome.desktop.interface", "gtk-theme", "Adwaita"])
+        .status();
+
+    // 3. Keyfile de sesión aislada de Malus DE (~/.config/malus-de/glib-2.0/settings/keyfile)
+    let keyfile_path = std::path::PathBuf::from(&home).join(".config/malus-de/glib-2.0/settings/keyfile");
+    if keyfile_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&keyfile_path) {
+            let mut lines = Vec::new();
+            let mut found_color = false;
+            let mut found_theme = false;
+            for line in content.lines() {
+                if line.starts_with("color-scheme=") {
+                    lines.push(format!("color-scheme='{}'", target));
+                    found_color = true;
+                } else if line.starts_with("gtk-theme=") {
+                    lines.push("gtk-theme='Adwaita'".to_string());
+                    found_theme = true;
+                } else {
+                    lines.push(line.to_string());
+                }
+            }
+            if !found_color {
+                lines.push(format!("color-scheme='{}'", target));
+            }
+            if !found_theme {
+                lines.push("gtk-theme='Adwaita'".to_string());
+            }
+            let _ = std::fs::write(&keyfile_path, lines.join("\n") + "\n");
+        }
+    }
+
+    // 4. Archivos settings.ini (GTK3 y GTK4)
+    let ini_paths = [
+        format!("{}/.config/malus-de/gtk-3.0/settings.ini", home),
+        format!("{}/.config/malus-de/gtk-4.0/settings.ini", home),
+        format!("{}/.config/gtk-3.0/settings.ini", home),
+        format!("{}/.config/gtk-4.0/settings.ini", home),
+    ];
+    for path_str in &ini_paths {
+        let p = std::path::PathBuf::from(path_str);
+        if let Some(parent) = p.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if p.exists() {
+            if let Ok(content) = std::fs::read_to_string(&p) {
+                let mut lines: Vec<String> = Vec::new();
+                let mut found_dark = false;
+                let mut found_theme = false;
+                for line in content.lines() {
+                    if line.starts_with("gtk-application-prefer-dark-theme=") {
+                        lines.push(format!("gtk-application-prefer-dark-theme={}", dark_val));
+                        found_dark = true;
+                    } else if line.starts_with("gtk-theme-name=") {
+                        lines.push("gtk-theme-name=Adwaita".to_string());
+                        found_theme = true;
+                    } else {
+                        lines.push(line.to_string());
+                    }
+                }
+                if !found_dark {
+                    lines.push(format!("gtk-application-prefer-dark-theme={}", dark_val));
+                }
+                if !found_theme {
+                    lines.push("gtk-theme-name=Adwaita".to_string());
+                }
+                let _ = std::fs::write(&p, lines.join("\n") + "\n");
+            }
+        } else {
+            let content = format!(
+                "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme={}\ngtk-cursor-theme-name=macOS\ngtk-cursor-theme-size=24\ngtk-theme-name=Adwaita\n",
+                dark_val
+            );
+            let _ = std::fs::write(&p, content);
+        }
+    }
+
+    // 5. Generar y escribir CSS actualizado
+    let light_css = get_malus_gtk_css(false);
+    let dark_css = get_malus_gtk_css(true);
+    let light_gtk3_css = get_malus_gtk3_css(false);
+    let dark_gtk3_css = get_malus_gtk3_css(true);
+
+    let active_gtk3 = if to_dark { &dark_gtk3_css } else { &light_gtk3_css };
+
+    let gtk3_paths = [
+        format!("{}/.config/gtk-3.0/gtk.css", home),
+        format!("{}/.config/malus-de/gtk-3.0/gtk.css", home),
+    ];
+    for p in &gtk3_paths {
+        let _ = std::fs::write(p, active_gtk3);
+    }
+
+    let gtk4_css_paths = [
+        format!("{}/.config/gtk-4.0/gtk.css", home),
+        format!("{}/.config/malus-de/gtk-4.0/gtk.css", home),
+    ];
+    for p in &gtk4_css_paths {
+        let _ = std::fs::write(p, if to_dark { &dark_css } else { &light_css });
+    }
+
+    let gtk4_dark_paths = [
+        format!("{}/.config/gtk-4.0/gtk-dark.css", home),
+        format!("{}/.config/malus-de/gtk-4.0/gtk-dark.css", home),
+    ];
+    for p in &gtk4_dark_paths {
+        let _ = std::fs::write(p, &dark_css);
+    }
+
+    // 6. Controles de navegadores
+    configure_browsers_traffic_lights(&home);
+
+    // 7. Notificar a GTK tocando los archivos CSS
+    for p in gtk3_paths.iter().chain(gtk4_css_paths.iter()).chain(gtk4_dark_paths.iter()) {
+        let _ = std::process::Command::new("touch").arg(p).status();
+    }
+
+    // 8. Reiniciar demonios de portal para que recarguen hojas de estilo en memoria
+    let _ = std::process::Command::new("systemctl")
+        .args(["--user", "restart", "xdg-desktop-portal-gtk", "xdg-desktop-portal-gnome"])
+        .status();
 }
 
 /// Configura los controles de ventana estilo semáforo macOS para Firefox y Brave
