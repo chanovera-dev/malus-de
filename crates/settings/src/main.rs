@@ -246,6 +246,10 @@ fn load_macos_settings_css() {
             padding: 16px 28px 24px 28px;
         }
 
+        overlay-split-view > .content-pane {
+            padding: 0px;
+        }
+
         .pane-header-title {
             font-size: 20px;
             font-weight: 700;
