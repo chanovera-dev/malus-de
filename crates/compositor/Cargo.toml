@@ -16,5 +16,6 @@ zbus.workspace = true
 glib.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
+serde_json.workspace = true
 rustix = { version = "0.38", features = ["fs"] }
 xcursor = "0.3"

@@ -112,6 +112,7 @@ pub struct MalusState {
     pub app_switcher: AppSwitcherState,
     pub cursor_status: smithay::input::pointer::CursorImageStatus,
     pub pending_displays_reload: bool,
+    pub saved_app_window_sizes: HashMap<String, Size<i32, Logical>>,
 }
 
 pub fn guess_icon_name(app_id: &str, title: &str) -> String {
@@ -148,6 +149,38 @@ pub fn toplevel_info(surface: &WlSurface) -> (Option<String>, Option<String>) {
             (None, None)
         }
     })
+}
+
+/// Normaliza el identificador de aplicación para consistencia en la persistencia
+pub fn normalize_app_id(app_id: &str) -> String {
+    let lower = app_id.to_lowercase();
+    if lower.contains("firefox") || lower.contains("mozilla") {
+        "firefox".to_string()
+    } else if lower.contains("brave") {
+        "brave".to_string()
+    } else if lower.contains("nautilus") || lower.contains("archivos") {
+        "org.gnome.nautilus".to_string()
+    } else if lower.contains("malus.settings") || lower.contains("malus-de-settings") {
+        "malus-settings".to_string()
+    } else {
+        lower
+    }
+}
+
+/// Obtiene el identificador de aplicación normalizado a partir de una superficie
+pub fn app_id_for_surface(surface: &WlSurface) -> Option<String> {
+    let (app_id, title) = toplevel_info(surface);
+    if let Some(id) = app_id {
+        if !id.is_empty() {
+            return Some(normalize_app_id(&id));
+        }
+    }
+    if let Some(t) = title {
+        if !t.is_empty() {
+            return Some(normalize_app_id(&t));
+        }
+    }
+    None
 }
 
 /// Identifica si una ventana pertenece a Firefox (para aplicar recorte squircle a subsuperficies
@@ -283,7 +316,51 @@ impl MalusState {
             app_switcher: AppSwitcherState::default(),
             cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
             pending_displays_reload: false,
+            saved_app_window_sizes: Self::load_saved_window_sizes(),
         }
+    }
+
+    /// Carga los tamaños de ventana guardados por aplicación desde ~/.config/malus-de/window_sizes.json
+    pub fn load_saved_window_sizes() -> HashMap<String, Size<i32, Logical>> {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let path = std::path::PathBuf::from(home).join(".config/malus-de/window_sizes.json");
+        if path.exists() {
+            if let Ok(data) = std::fs::read_to_string(&path) {
+                if let Ok(map) = serde_json::from_str::<HashMap<String, (i32, i32)>>(&data) {
+                    tracing::info!("📂 Tamaños de ventana cargados desde disco: {} aplicaciones", map.len());
+                    return map.into_iter().map(|(k, (w, h))| (k, Size::from((w, h)))).collect();
+                }
+            }
+        }
+        HashMap::new()
+    }
+
+    /// Guarda el último tamaño conocido de una aplicación y lo persiste en disco
+    pub fn save_app_window_size(&mut self, app_id: &str, size: Size<i32, Logical>) {
+        if size.w < 200 || size.h < 200 {
+            return;
+        }
+        let clean_id = normalize_app_id(app_id);
+        self.saved_app_window_sizes.insert(clean_id, size);
+
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let config_dir = std::path::PathBuf::from(home).join(".config/malus-de");
+        let _ = std::fs::create_dir_all(&config_dir);
+        let path = config_dir.join("window_sizes.json");
+        let map: HashMap<String, (i32, i32)> = self
+            .saved_app_window_sizes
+            .iter()
+            .map(|(k, s)| (k.clone(), (s.w, s.h)))
+            .collect();
+        if let Ok(json) = serde_json::to_string_pretty(&map) {
+            let _ = std::fs::write(path, json);
+        }
+    }
+
+    /// Obtiene el tamaño recordado de una aplicación si existe
+    pub fn get_saved_window_size(&self, app_id: &str) -> Option<Size<i32, Logical>> {
+        let clean_id = normalize_app_id(app_id);
+        self.saved_app_window_sizes.get(&clean_id).copied()
     }
 
     pub fn get_or_assign_window_id(&mut self, surface: &WlSurface) -> u64 {
@@ -1210,7 +1287,7 @@ impl XdgShellHandler for MalusState {
             })
             .or_else(|| self.space.outputs().next().cloned());
 
-        let spawn_loc = if let Some(ref output) = target_output {
+        let (spawn_loc, usable_zone) = if let Some(ref output) = target_output {
             output.enter(surface.wl_surface());
             let scale = output.current_scale().fractional_scale();
             smithay::wayland::compositor::with_states(surface.wl_surface(), |states| {
@@ -1219,16 +1296,34 @@ impl XdgShellHandler for MalusState {
                 });
             });
             let geo = self.space.output_geometry(output).unwrap_or_default();
+            let usable = self.usable_zone_for_output(output);
             let offset = ((self.space.elements().count() % 6) as i32) * 28;
-            (geo.loc.x + 80 + offset, geo.loc.y + 60 + offset)
+            ((geo.loc.x + 80 + offset, geo.loc.y + 60 + offset), usable)
         } else {
-            (80, 60)
+            ((80, 60), Rectangle::from_loc_and_size((0, 0), (1920, 1080)))
         };
 
         let window = smithay::desktop::Window::new_wayland_window(surface.clone());
         window.set_activated(true);
+
+        // Si tenemos un tamaño recordado para esta aplicación, sugerirlo en el configure inicial
+        let initial_size = if surface.get_parent_surface().is_none() {
+            let app_id = app_id_for_surface(surface.wl_surface());
+            app_id.as_deref().and_then(|id| self.get_saved_window_size(id)).map(|saved| {
+                let max_w = (usable_zone.size.w - 80).max(400);
+                let max_h = (usable_zone.size.h - 80).max(300);
+                Size::from((saved.w.min(max_w).max(320), saved.h.min(max_h).max(240)))
+            })
+        } else {
+            None
+        };
+
         surface.with_pending_state(|state| {
             state.states.set(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated);
+            if let Some(size) = initial_size {
+                tracing::info!("📐 [State] Aplicando tamaño de ventana recordado a nueva ventana: {:?}", size);
+                state.size = Some(size);
+            }
         });
         surface.send_configure();
         self.space.map_element(window, spawn_loc, true);
@@ -1426,17 +1521,43 @@ impl XdgShellHandler for MalusState {
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         tracing::info!("🗑️ [XdgShell] Ventana toplevel destruida");
         let surf = surface.wl_surface();
-        self.window_restore_geometries.remove(surf);
-        self.minimized_windows.remove(surf);
-        self.window_ids.remove(surf);
-        self.active_animations.retain(|a| &a.surface != surf);
-        self.notify_minimized_windows();
 
         let window = self
             .space
             .elements()
             .find(|w| w.toplevel() == Some(&surface) || w.wl_surface().as_deref() == Some(surf))
             .cloned();
+
+        // Guardar el tamaño final no maximizado/no tiled de la aplicación
+        if surface.get_parent_surface().is_none() {
+            if let Some(id) = app_id_for_surface(surf) {
+                let states = &surface.current_state().states;
+                let is_snapped = states.contains(XdgState::Maximized)
+                    || states.contains(XdgState::TiledLeft)
+                    || states.contains(XdgState::TiledRight);
+
+                if !is_snapped {
+                    if let Some(ref win) = window {
+                        let geo = win.geometry();
+                        if geo.size.w >= 200 && geo.size.h >= 200 {
+                            tracing::info!("💾 Recordando tamaño de ventana para {}: {:?}", id, geo.size);
+                            self.save_app_window_size(&id, geo.size);
+                        }
+                    }
+                } else if let Some((_, saved_size)) = self.window_restore_geometries.get(surf).copied() {
+                    if saved_size.w >= 200 && saved_size.h >= 200 {
+                        tracing::info!("💾 Recordando tamaño previo no maximizado para {}: {:?}", id, saved_size);
+                        self.save_app_window_size(&id, saved_size);
+                    }
+                }
+            }
+        }
+
+        self.window_restore_geometries.remove(surf);
+        self.minimized_windows.remove(surf);
+        self.window_ids.remove(surf);
+        self.active_animations.retain(|a| &a.surface != surf);
+        self.notify_minimized_windows();
 
         if let Some(window) = window {
             self.space.unmap_elem(&window);
@@ -1489,6 +1610,21 @@ impl XdgShellHandler for MalusState {
     }
 
     fn app_id_changed(&mut self, surface: ToplevelSurface) {
+        if surface.get_parent_surface().is_none() {
+            if let Some(id) = app_id_for_surface(surface.wl_surface()) {
+                if let Some(saved) = self.get_saved_window_size(&id) {
+                    let cur_geo = self.window_for_surface(surface.wl_surface()).map(|w| w.geometry());
+                    let is_unconfigured = cur_geo.map(|g| g.size.w <= 200 || g.size.h <= 200).unwrap_or(true);
+                    if is_unconfigured {
+                        tracing::info!("📐 [app_id_changed] Aplicando tamaño recordado para {}: {:?}", id, saved);
+                        surface.with_pending_state(|state| {
+                            state.size = Some(saved);
+                        });
+                        surface.send_configure();
+                    }
+                }
+            }
+        }
         self.notify_running_apps();
         let focused = self.seat.get_keyboard().and_then(|kb| kb.current_focus());
         if focused.as_ref() == Some(surface.wl_surface()) {
