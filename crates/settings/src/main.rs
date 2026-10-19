@@ -53,6 +53,21 @@ fn main() {
         }
     );
 
+    // Escuchar reactivamente cambios en el modo de apariencia desde el Centro de Control o scripts
+    let gsettings = Box::leak(Box::new(gtk4::gio::Settings::new("org.gnome.desktop.interface")));
+    gsettings.connect_changed(Some("color-scheme"), move |settings, _| {
+        let scheme = settings.string("color-scheme");
+        let to_dark = scheme.contains("dark");
+        tracing::info!("🎨 Detección reactiva de cambio de apariencia: {} (to_dark: {})", scheme, to_dark);
+        libadwaita::StyleManager::default().set_color_scheme(
+            if to_dark {
+                libadwaita::ColorScheme::ForceDark
+            } else {
+                libadwaita::ColorScheme::ForceLight
+            }
+        );
+    });
+
     let initial_panel = args.panel.clone();
 
     let app = Application::builder()
