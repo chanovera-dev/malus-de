@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 /// Configuración global de Malus DE
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,52 +46,268 @@ impl AppearanceConfig {
     }
 }
 
-use std::path::PathBuf;
+/// Reglas CSS de controles de ventana macOS (Traffic Lights) para tema Claro
+pub const MALUS_GTK_CSS_WINDOWCONTROLS_LIGHT: &str = r#"/* Controles de ventana estilo macOS (Claro) */
+windowcontrols {
+    border-spacing: 8px;
+    padding: 0;
+    margin-top: 10px;
+    margin-bottom: 10px;
+}
 
-/// Inicializa el entorno de configuración aislado para Malus DE en `$HOME/.config/malus-de`.
-/// Configura el backend `keyfile` de GSettings y los archivos `settings.ini` de GTK3/GTK4
-/// con el layout de botones a la macOS (`close,minimize,maximize:`) sin alterar dconf del host.
-pub fn setup_isolated_session_environment() -> std::io::Result<PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let malus_config_dir = PathBuf::from(&home).join(".config").join("malus-de");
+windowcontrols.start {
+    margin-left: 10px;
+    margin-right: 12px;
+}
 
-    // 1. Directorio glib-2.0/settings para el backend GSettings keyfile
-    let keyfile_dir = malus_config_dir.join("glib-2.0").join("settings");
-    std::fs::create_dir_all(&keyfile_dir)?;
-    let keyfile_path = keyfile_dir.join("keyfile");
-    let keyfile_content = r#"[org/gnome/desktop/wm/preferences]
-button-layout='close,minimize,maximize:'
+windowcontrols.end {
+    margin-right: 10px;
+    margin-left: 12px;
+}
 
-[org/gnome/desktop/interface]
-color-scheme='prefer-light'
-cursor-theme='macOS'
-cursor-size=24
-icon-theme='Adwaita'
-gtk-theme='Adwaita'
+windowcontrols > button,
+headerbar button.titlebutton {
+    min-width: 13px;
+    min-height: 13px;
+    padding: 0;
+    margin: 0;
+    border-radius: 9999px;
+    border-style: solid;
+    border-width: 0.5px;
+    box-shadow: none;
+    outline: none;
+    background-clip: padding-box;
+    transition: background-color 100ms ease, border-color 100ms ease, opacity 100ms ease;
+}
 
-[org/gnome/settings-daemon/plugins/xsettings]
-overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
+windowcontrols > button > image,
+headerbar button.titlebutton > image {
+    padding: 0;
+    margin: 0;
+    min-width: 13px;
+    min-height: 13px;
+    border-radius: 9999px;
+    opacity: 0;
+    transition: opacity 120ms ease;
+    background-color: transparent;
+    box-shadow: none;
+    -gtk-icon-size: 8px;
+}
+
+windowcontrols:hover > button > image,
+windowcontrols > button:hover > image,
+headerbar:hover button.titlebutton > image,
+headerbar button.titlebutton:hover > image {
+    opacity: 0.85;
+}
+
+windowcontrols > button.close,
+headerbar button.titlebutton.close {
+    background-color: #ff5f56;
+    border-color: #e0443e;
+}
+windowcontrols > button.close:hover,
+headerbar button.titlebutton.close:hover {
+    background-color: #ff473d;
+    border-color: #c93630;
+}
+windowcontrols > button.close:active,
+headerbar button.titlebutton.close:active {
+    background-color: #bf3933;
+    border-color: #a82f2a;
+}
+windowcontrols > button.close > image,
+headerbar button.titlebutton.close > image {
+    color: #4c0000;
+}
+
+windowcontrols > button.minimize,
+headerbar button.titlebutton.minimize {
+    background-color: #ffbd2e;
+    border-color: #dea123;
+}
+windowcontrols > button.minimize:hover,
+headerbar button.titlebutton.minimize:hover {
+    background-color: #ffb114;
+    border-color: #c48c18;
+}
+windowcontrols > button.minimize:active,
+headerbar button.titlebutton.minimize:active {
+    background-color: #bf8516;
+    border-color: #9e6d0f;
+}
+windowcontrols > button.minimize > image,
+headerbar button.titlebutton.minimize > image {
+    color: #593b00;
+}
+
+windowcontrols > button.maximize,
+headerbar button.titlebutton.maximize {
+    background-color: #27c93f;
+    border-color: #1aab29;
+}
+windowcontrols > button.maximize:hover,
+headerbar button.titlebutton.maximize:hover {
+    background-color: #1fbd36;
+    border-color: #159322;
+}
+windowcontrols > button.maximize:active,
+headerbar button.titlebutton.maximize:active {
+    background-color: #158a25;
+    border-color: #0f6c1a;
+}
+windowcontrols > button.maximize > image,
+headerbar button.titlebutton.maximize > image {
+    color: #004d11;
+}
+
+window:backdrop windowcontrols > button,
+.backdrop windowcontrols > button,
+window:backdrop headerbar button.titlebutton,
+.backdrop headerbar button.titlebutton {
+    background-color: rgba(0, 0, 0, 0.12);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+window:backdrop windowcontrols > button > image,
+.backdrop windowcontrols > button > image,
+window:backdrop headerbar button.titlebutton > image,
+.backdrop headerbar button.titlebutton > image {
+    opacity: 0;
+}
 "#;
-    std::fs::write(keyfile_path, keyfile_content)?;
 
-    // 2. Archivos settings.ini para GTK3 y GTK4
-    let gtk3_dir = malus_config_dir.join("gtk-3.0");
-    std::fs::create_dir_all(&gtk3_dir)?;
-    let gtk_ini_content = r#"[Settings]
-gtk-decoration-layout=close,minimize,maximize:
-gtk-application-prefer-dark-theme=0
-gtk-cursor-theme-name=macOS
-gtk-cursor-theme-size=24
-gtk-theme-name=Adwaita
+/// Reglas CSS de controles de ventana macOS (Traffic Lights) para tema Oscuro
+pub const MALUS_GTK_CSS_WINDOWCONTROLS_DARK: &str = r#"/* Controles de ventana estilo macOS (Oscuro) */
+windowcontrols {
+    border-spacing: 8px;
+    padding: 0;
+    margin-top: 10px;
+    margin-bottom: 10px;
+}
+
+windowcontrols.start {
+    margin-left: 10px;
+    margin-right: 12px;
+}
+
+windowcontrols.end {
+    margin-right: 10px;
+    margin-left: 12px;
+}
+
+windowcontrols > button,
+headerbar button.titlebutton {
+    min-width: 13px;
+    min-height: 13px;
+    padding: 0;
+    margin: 0;
+    border-radius: 9999px;
+    border-style: solid;
+    border-width: 0.5px;
+    box-shadow: none;
+    outline: none;
+    background-clip: padding-box;
+    transition: background-color 100ms ease, border-color 100ms ease, opacity 100ms ease;
+}
+
+windowcontrols > button > image,
+headerbar button.titlebutton > image {
+    padding: 0;
+    margin: 0;
+    min-width: 13px;
+    min-height: 13px;
+    border-radius: 9999px;
+    opacity: 0;
+    transition: opacity 120ms ease;
+    background-color: transparent;
+    box-shadow: none;
+    -gtk-icon-size: 8px;
+}
+
+windowcontrols:hover > button > image,
+windowcontrols > button:hover > image,
+headerbar:hover button.titlebutton > image,
+headerbar button.titlebutton:hover > image {
+    opacity: 0.85;
+}
+
+windowcontrols > button.close,
+headerbar button.titlebutton.close {
+    background-color: #ff5f56;
+    border-color: #e0443e;
+}
+windowcontrols > button.close:hover,
+headerbar button.titlebutton.close:hover {
+    background-color: #ff473d;
+    border-color: #c93630;
+}
+windowcontrols > button.close:active,
+headerbar button.titlebutton.close:active {
+    background-color: #bf3933;
+    border-color: #a82f2a;
+}
+windowcontrols > button.close > image,
+headerbar button.titlebutton.close > image {
+    color: #4c0000;
+}
+
+windowcontrols > button.minimize,
+headerbar button.titlebutton.minimize {
+    background-color: #ffbd2e;
+    border-color: #dea123;
+}
+windowcontrols > button.minimize:hover,
+headerbar button.titlebutton.minimize:hover {
+    background-color: #ffb114;
+    border-color: #c48c18;
+}
+windowcontrols > button.minimize:active,
+headerbar button.titlebutton.minimize:active {
+    background-color: #bf8516;
+    border-color: #9e6d0f;
+}
+windowcontrols > button.minimize > image,
+headerbar button.titlebutton.minimize > image {
+    color: #593b00;
+}
+
+windowcontrols > button.maximize,
+headerbar button.titlebutton.maximize {
+    background-color: #27c93f;
+    border-color: #1aab29;
+}
+windowcontrols > button.maximize:hover,
+headerbar button.titlebutton.maximize:hover {
+    background-color: #1fbd36;
+    border-color: #159322;
+}
+windowcontrols > button.maximize:active,
+headerbar button.titlebutton.maximize:active {
+    background-color: #158a25;
+    border-color: #0f6c1a;
+}
+windowcontrols > button.maximize > image,
+headerbar button.titlebutton.maximize > image {
+    color: #004d11;
+}
+
+window:backdrop windowcontrols > button,
+.backdrop windowcontrols > button,
+window:backdrop headerbar button.titlebutton,
+.backdrop headerbar button.titlebutton {
+    background-color: rgba(255, 255, 255, 0.18);
+    border-color: rgba(255, 255, 255, 0.10);
+}
+window:backdrop windowcontrols > button > image,
+.backdrop windowcontrols > button > image,
+window:backdrop headerbar button.titlebutton > image,
+.backdrop headerbar button.titlebutton > image {
+    opacity: 0;
+}
 "#;
-    std::fs::write(gtk3_dir.join("settings.ini"), gtk_ini_content)?;
 
-    let gtk4_dir = malus_config_dir.join("gtk-4.0");
-    std::fs::create_dir_all(&gtk4_dir)?;
-    std::fs::write(gtk4_dir.join("settings.ini"), gtk_ini_content)?;
-
-    // 2.1. Archivo gtk.css aislado (oculta títulos de ventana redundantes en la cabecera estilo macOS y aplica esquinas squircle)
-    let gtk_css_content = r#"/* Malus DE - Estilo macOS aislado para aplicaciones GTK3 y GTK4 */
+/// Reglas CSS de Malus DE para controles de ventana estilo macOS y recortes squircle
+pub const MALUS_GTK_CSS_SQUIRCLE_RULES: &str = r#"/* Malus DE - Estilo macOS aislado para aplicaciones GTK3 y GTK4 */
 windowtitle .title,
 headerbar windowtitle .title {
     opacity: 0;
@@ -98,11 +315,6 @@ headerbar windowtitle .title {
     min-height: 0px;
     margin: 0px;
     padding: 0px;
-}
-
-windowcontrols.start {
-    margin-right: 6px;
-    margin-left: 2px;
 }
 
 /* Ventanas GTK3, GTK4 y Libadwaita: esquinas rectas a nivel de widget para permitir
@@ -187,16 +399,92 @@ button.link:hover {
     padding: 2px 6px;
 }
 "#;
-    let _ = std::fs::write(gtk3_dir.join("gtk.css"), gtk_css_content);
-    let _ = std::fs::write(gtk4_dir.join("gtk.css"), gtk_css_content);
 
-    // Sincronizar también con ~/.config/gtk-3.0 y ~/.config/gtk-4.0
+/// Genera la hoja de estilos CSS completa de Malus DE (controles macOS + recortes squircle)
+pub fn get_malus_gtk_css(dark: bool) -> String {
+    let controls = if dark {
+        MALUS_GTK_CSS_WINDOWCONTROLS_DARK
+    } else {
+        MALUS_GTK_CSS_WINDOWCONTROLS_LIGHT
+    };
+    format!("{}\n{}", controls, MALUS_GTK_CSS_SQUIRCLE_RULES)
+}
+
+/// Inicializa el entorno de configuración aislado para Malus DE en `$HOME/.config/malus-de`.
+/// Configura el backend `keyfile` de GSettings y los archivos `settings.ini` de GTK3/GTK4
+/// con el layout de botones a la macOS (`close,minimize,maximize:`) sin alterar dconf del host.
+pub fn setup_isolated_session_environment() -> std::io::Result<PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let malus_config_dir = PathBuf::from(&home).join(".config").join("malus-de");
+
+    // 1. Directorio glib-2.0/settings para el backend GSettings keyfile (preservar si ya existe)
+    let keyfile_dir = malus_config_dir.join("glib-2.0").join("settings");
+    std::fs::create_dir_all(&keyfile_dir)?;
+    let keyfile_path = keyfile_dir.join("keyfile");
+    if !keyfile_path.exists() {
+        let keyfile_content = r#"[org/gnome/desktop/wm/preferences]
+button-layout='close,minimize,maximize:'
+
+[org/gnome/desktop/interface]
+color-scheme='prefer-light'
+cursor-theme='macOS'
+cursor-size=24
+icon-theme='Adwaita'
+gtk-theme='Adwaita'
+
+[org/gnome/settings-daemon/plugins/xsettings]
+overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
+"#;
+        std::fs::write(&keyfile_path, keyfile_content)?;
+    }
+
+    // 2. Archivos settings.ini para GTK3 y GTK4 (preservar configuraciones existentes del usuario)
+    let gtk3_dir = malus_config_dir.join("gtk-3.0");
+    std::fs::create_dir_all(&gtk3_dir)?;
+    let gtk3_ini = gtk3_dir.join("settings.ini");
+    if !gtk3_ini.exists() {
+        let gtk_ini_content = r#"[Settings]
+gtk-decoration-layout=close,minimize,maximize:
+gtk-application-prefer-dark-theme=0
+gtk-cursor-theme-name=macOS
+gtk-cursor-theme-size=24
+gtk-theme-name=Adwaita
+"#;
+        std::fs::write(&gtk3_ini, gtk_ini_content)?;
+    }
+
+    let gtk4_dir = malus_config_dir.join("gtk-4.0");
+    std::fs::create_dir_all(&gtk4_dir)?;
+    let gtk4_ini = gtk4_dir.join("settings.ini");
+    if !gtk4_ini.exists() {
+        let gtk_ini_content = r#"[Settings]
+gtk-decoration-layout=close,minimize,maximize:
+gtk-application-prefer-dark-theme=0
+gtk-cursor-theme-name=macOS
+gtk-cursor-theme-size=24
+gtk-theme-name=Adwaita
+"#;
+        std::fs::write(&gtk4_ini, gtk_ini_content)?;
+    }
+
+    // 2.1. Archivos gtk.css y gtk-dark.css nativos estilo macOS (GTK3 y GTK4)
     let user_gtk3 = PathBuf::from(&home).join(".config/gtk-3.0");
     let user_gtk4 = PathBuf::from(&home).join(".config/gtk-4.0");
     let _ = std::fs::create_dir_all(&user_gtk3);
     let _ = std::fs::create_dir_all(&user_gtk4);
-    let _ = std::fs::write(user_gtk3.join("gtk.css"), gtk_css_content);
-    let _ = std::fs::write(user_gtk4.join("gtk.css"), gtk_css_content);
+
+    let light_css = get_malus_gtk_css(false);
+    let dark_css = get_malus_gtk_css(true);
+
+    // GTK 3
+    let _ = std::fs::write(gtk3_dir.join("gtk.css"), &light_css);
+    let _ = std::fs::write(user_gtk3.join("gtk.css"), &light_css);
+
+    // GTK 4 (sesión Malus DE y usuario)
+    let _ = std::fs::write(gtk4_dir.join("gtk.css"), &light_css);
+    let _ = std::fs::write(gtk4_dir.join("gtk-dark.css"), &dark_css);
+    let _ = std::fs::write(user_gtk4.join("gtk.css"), &light_css);
+    let _ = std::fs::write(user_gtk4.join("gtk-dark.css"), &dark_css);
 
     // 3. Biblioteca compartida para garantizar botones consistentes en GTK3/GTK4 (macOS style)
     let lib_dir = malus_config_dir.join("lib");
@@ -326,6 +614,9 @@ void adw_window_title_set_title(void *self, const char *title) {
         let _ = input_cfg.save();
     }
 
+    // 7. Configuración automática de controles semáforo macOS para Firefox y Brave
+    configure_browsers_traffic_lights(&home);
+
     // Exportar variables en el entorno del proceso actual
     std::env::set_var("XDG_CONFIG_HOME", &malus_config_dir);
     std::env::set_var("GSETTINGS_BACKEND", "keyfile");
@@ -334,6 +625,187 @@ void adw_window_title_set_title(void *self, const char *title) {
 
     Ok(malus_config_dir)
 }
+
+/// Configura los controles de ventana estilo semáforo macOS para Firefox y Brave
+pub fn configure_browsers_traffic_lights(home: &str) {
+    let firefox_css = r#"/* Malus DE - Controles de ventana macOS (Traffic Lights) para Firefox */
+.titlebar-buttonbox-container {
+    -moz-box-ordinal-group: 0 !important;
+    order: -1 !important;
+}
+
+.titlebar-buttonbox {
+    margin-left: 8px !important;
+    margin-right: 8px !important;
+}
+
+.titlebar-button {
+    padding: 0 !important;
+    margin: auto 3.5px !important;
+    width: 13px !important;
+    height: 13px !important;
+    min-width: 13px !important;
+    min-height: 13px !important;
+    max-width: 13px !important;
+    max-height: 13px !important;
+    border-radius: 9999px !important;
+    appearance: none !important;
+    -moz-appearance: none !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    border-style: solid !important;
+    border-width: 0.5px !important;
+    transition: background-color 100ms ease, border-color 100ms ease !important;
+}
+
+.titlebar-button > .toolbarbutton-icon {
+    display: none !important;
+}
+
+.titlebar-close {
+    background-color: #ff5f56 !important;
+    border-color: #e0443e !important;
+}
+.titlebar-close:hover {
+    background-color: #ff473d !important;
+    border-color: #c93630 !important;
+}
+.titlebar-close:active {
+    background-color: #bf3933 !important;
+    border-color: #a82f2a !important;
+}
+
+.titlebar-min {
+    background-color: #ffbd2e !important;
+    border-color: #dea123 !important;
+}
+.titlebar-min:hover {
+    background-color: #ffb114 !important;
+    border-color: #c48c18 !important;
+}
+.titlebar-min:active {
+    background-color: #bf8516 !important;
+    border-color: #9e6d0f !important;
+}
+
+.titlebar-max {
+    background-color: #27c93f !important;
+    border-color: #1aab29 !important;
+}
+.titlebar-max:hover {
+    background-color: #1fbd36 !important;
+    border-color: #159322 !important;
+}
+.titlebar-max:active {
+    background-color: #158a25 !important;
+    border-color: #0f6c1a !important;
+}
+
+:root[unfocused] .titlebar-button {
+    background-color: rgba(0, 0, 0, 0.12) !important;
+    border-color: rgba(0, 0, 0, 0.08) !important;
+}
+@media (prefers-color-scheme: dark) {
+    :root[unfocused] .titlebar-button {
+        background-color: rgba(255, 255, 255, 0.15) !important;
+        border-color: rgba(255, 255, 255, 0.1) !important;
+    }
+}
+"#;
+
+    // 1. Firefox: Configurar user.js y chrome/userChrome.css para todos los perfiles
+    let ff_bases = [
+        format!("{}/.config/mozilla/firefox", home),
+        format!("{}/.config/malus-de/mozilla/firefox", home),
+    ];
+    for base_str in &ff_bases {
+        let base = Path::new(base_str);
+        if let Ok(entries) = std::fs::read_dir(base) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let is_profile = path.extension().is_some()
+                        || path.join("prefs.js").exists()
+                        || path.join("compatibility.ini").exists();
+                    if is_profile {
+                        // user.js
+                        let user_js = path.join("user.js");
+                        let pref_line = "user_pref(\"toolkit.legacyUserProfileCustomizations.stylesheets\", true);\n";
+                        let existing = std::fs::read_to_string(&user_js).unwrap_or_default();
+                        if !existing.contains("toolkit.legacyUserProfileCustomizations.stylesheets") {
+                            let _ = std::fs::write(&user_js, format!("{}\n{}", existing, pref_line));
+                        }
+                        // userChrome.css
+                        let chrome_dir = path.join("chrome");
+                        let _ = std::fs::create_dir_all(&chrome_dir);
+                        let _ = std::fs::write(chrome_dir.join("userChrome.css"), firefox_css);
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Brave: Forzar system_theme: 1 en las preferencias de Brave
+    let brave_prefs = [
+        format!("{}/.config/BraveSoftware/Brave-Origin/Default/Preferences", home),
+        format!("{}/.config/malus-de/BraveSoftware/Brave-Origin/Default/Preferences", home),
+    ];
+    for bp in &brave_prefs {
+        if let Ok(content) = std::fs::read_to_string(bp) {
+            if let Ok(mut json_val) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(obj) = json_val.as_object_mut() {
+                    let extensions = obj.entry("extensions").or_insert_with(|| serde_json::json!({}));
+                    if let Some(ext_obj) = extensions.as_object_mut() {
+                        let theme = ext_obj.entry("theme").or_insert_with(|| serde_json::json!({}));
+                        if let Some(theme_obj) = theme.as_object_mut() {
+                            theme_obj.insert("system_theme".to_string(), serde_json::json!(1));
+                            if let Ok(new_content) = serde_json::to_string_pretty(&json_val) {
+                                let _ = std::fs::write(bp, new_content);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Brave Launcher Wrapper con soporte GTK4
+    let bin_dir = Path::new(home).join(".local/bin");
+    let _ = std::fs::create_dir_all(&bin_dir);
+    let brave_wrapper = r#"#!/usr/bin/env bash
+# Malus DE - Brave Launcher con controles de ventana GTK4 nativos macOS
+REAL_BRAVE="/opt/brave.com/brave-origin/brave-origin"
+if [ ! -x "$REAL_BRAVE" ]; then
+    REAL_BRAVE="/usr/bin/brave-origin-stable"
+fi
+exec "$REAL_BRAVE" --gtk-version=4 "$@"
+"#;
+    for bname in &["brave", "brave-browser"] {
+        let bpath = bin_dir.join(bname);
+        let _ = std::fs::remove_file(&bpath);
+        if std::fs::write(&bpath, brave_wrapper).is_ok() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&bpath, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+    }
+
+    // 4. Desktop entry override para Brave
+    let apps_dir = Path::new(home).join(".local/share/applications");
+    let _ = std::fs::create_dir_all(&apps_dir);
+    let desktop_source = "/usr/share/applications/brave-origin.desktop";
+    let desktop_dest = apps_dir.join("brave-origin.desktop");
+    if let Ok(dcontent) = std::fs::read_to_string(desktop_source) {
+        let modified = dcontent.replace(
+            "Exec=/usr/bin/brave-origin-stable",
+            "Exec=/usr/bin/brave-origin-stable --gtk-version=4",
+        );
+        let _ = std::fs::write(desktop_dest, modified);
+    }
+}
+
 
 
 /// Configuración de una aplicación anclada en el Dock

@@ -23,14 +23,26 @@ struct Args {
     /// Panel inicial a mostrar: displays, wallpaper, keyboard, appearance, dock, spotlight, sound, about
     #[arg(short, long, default_value = "spotlight")]
     panel: String,
+
+    /// Establecer tema GTK directamente (ej: WhiteSur-Dark, WhiteSur-Light, Adwaita) y salir
+    #[arg(long)]
+    theme: Option<String>,
 }
 
 fn main() {
     init_logging("malus_de_settings");
     let _ = malus_de_common::config::setup_isolated_session_environment();
 
+    let _ = gtk4::init();
     if let Err(err) = libadwaita::init() {
         tracing::warn!("Aviso al inicializar libadwaita: {:?}", err);
+    }
+
+    let args = Args::parse();
+    if let Some(theme) = args.theme {
+        set_gtk_theme(&theme);
+        println!("✓ Tema GTK '{}' aplicado con éxito a GTK3, GTK4 y Libadwaita.", theme);
+        return;
     }
 
     libadwaita::StyleManager::default().set_color_scheme(
@@ -41,7 +53,6 @@ fn main() {
         }
     );
 
-    let args = Args::parse();
     let initial_panel = args.panel.clone();
 
     let app = Application::builder()
@@ -2396,262 +2407,34 @@ fn is_dark_mode_active() -> bool {
 }
 
 fn get_installed_gtk_themes() -> Vec<(String, String, &'static str)> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let dirs = [
-        format!("{}/.themes", home),
-        format!("{}/.local/share/themes", home),
-        "/usr/share/themes".to_string(),
-    ];
-
-    let mut found_names = std::collections::HashSet::new();
-    let mut themes = Vec::new();
-
-    // Soportar siempre el tema nativo Adwaita de GNOME / Libadwaita
-    themes.push((
-        "Adwaita".to_string(),
-        "🐧 Adwaita (Nativo)".to_string(),
-        "Tema estándar y limpio del sistema GNOME / Libadwaita",
-    ));
-    found_names.insert("Adwaita".to_string());
-
-    for dir in &dirs {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    let has_gtk3 = path.join("gtk-3.0").exists();
-                    let has_gtk4 = path.join("gtk-4.0").exists();
-                    if has_gtk3 || has_gtk4 {
-                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                            if !name.ends_with("-hdpi") && !name.ends_with("-xhdpi") && found_names.insert(name.to_string()) {
-                                let (label, desc) = match name {
-                                    "WhiteSur-Dark" => ("🍎 WhiteSur Oscuro", "Estilo macOS Sonoma oscuro con controles y botones redondeados"),
-                                    "WhiteSur-Light" => ("🍎 WhiteSur Claro", "Estilo macOS Sonoma claro con controles y botones redondeados"),
-                                    "WhiteSur-Dark-solid" => ("🍎 WhiteSur Oscuro Sólido", "Variante oscura con fondos sólidos sin efecto de translucidez"),
-                                    "WhiteSur-Light-solid" => ("🍎 WhiteSur Claro Sólido", "Variante clara con fondos sólidos sin efecto de translucidez"),
-                                    other => (other, "Tema de controles GTK instalado"),
-                                };
-                                themes.push((name.to_string(), label.to_string(), desc));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Ordenar para priorizar variantes WhiteSur y Adwaita
-    themes.sort_by(|a, b| {
-        let order_score = |id: &str| match id {
-            "WhiteSur-Dark" => 1,
-            "WhiteSur-Light" => 2,
-            "WhiteSur-Dark-solid" => 3,
-            "WhiteSur-Light-solid" => 4,
-            "Adwaita" => 5,
-            _ => 10,
-        };
-        order_score(&a.0).cmp(&order_score(&b.0)).then_with(|| a.0.cmp(&b.0))
-    });
-
-    themes
+    vec![
+        (
+            "Adwaita-Dark".to_string(),
+            "🍎 Adwaita macOS Oscuro".to_string(),
+            "Estilo macOS Sonoma oscuro con semáforos integrados y recortes Squircle",
+        ),
+        (
+            "Adwaita-Light".to_string(),
+            "🍎 Adwaita macOS Claro".to_string(),
+            "Estilo macOS Sonoma claro con semáforos integrados y recortes Squircle",
+        ),
+    ]
 }
 
 fn get_current_gtk_theme() -> String {
-    Command::new("gsettings")
-        .args(["get", "org.gnome.desktop.interface", "gtk-theme"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().trim_matches('\'').to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "Adwaita".to_string())
+    if is_dark_mode_active() {
+        "Adwaita-Dark".to_string()
+    } else {
+        "Adwaita-Light".to_string()
+    }
 }
 
 fn set_gtk_theme(theme_name: &str) {
     tracing::info!("🎨 Aplicando tema GTK y controles: {}", theme_name);
-
-    // 1. gsettings
-    let _ = Command::new("gsettings")
-        .args(["set", "org.gnome.desktop.interface", "gtk-theme", theme_name])
-        .status();
-
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-
-    // 2. keyfile aislado de Malus DE
-    let keyfile_path = PathBuf::from(&home).join(".config/malus-de/glib-2.0/settings/keyfile");
-    if keyfile_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&keyfile_path) {
-            let mut new_lines = Vec::new();
-            let mut found = false;
-            for line in content.lines() {
-                if line.starts_with("gtk-theme=") {
-                    new_lines.push(format!("gtk-theme='{}'", theme_name));
-                    found = true;
-                } else {
-                    new_lines.push(line.to_string());
-                }
-            }
-            if !found {
-                new_lines.push(format!("gtk-theme='{}'", theme_name));
-            }
-            let _ = std::fs::write(&keyfile_path, new_lines.join("\n") + "\n");
-        }
-    }
-
-    // 3. settings.ini para GTK3 y GTK4
-    let ini_paths = [
-        format!("{}/.config/malus-de/gtk-3.0/settings.ini", home),
-        format!("{}/.config/malus-de/gtk-4.0/settings.ini", home),
-        format!("{}/.config/gtk-3.0/settings.ini", home),
-        format!("{}/.config/gtk-4.0/settings.ini", home),
-    ];
-    for path_str in &ini_paths {
-        let path = PathBuf::from(path_str);
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                let mut lines: Vec<String> = Vec::new();
-                let mut found = false;
-                for line in content.lines() {
-                    if line.starts_with("gtk-theme-name=") {
-                        lines.push(format!("gtk-theme-name={}", theme_name));
-                        found = true;
-                    } else {
-                        lines.push(line.to_string());
-                    }
-                }
-                if !found {
-                    lines.push(format!("gtk-theme-name={}", theme_name));
-                }
-                let _ = std::fs::write(&path, lines.join("\n") + "\n");
-            }
-        } else {
-            let dark_num = if is_dark_mode_active() { "1" } else { "0" };
-            let (cursor_theme, cursor_sz) = get_current_cursor_config();
-            let content = format!(
-                "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme={}\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-theme-name={}\n",
-                dark_num, cursor_theme, cursor_sz, theme_name
-            );
-            let _ = std::fs::write(&path, content);
-        }
-    }
-
-    // 4. GTK4 / Libadwaita theme linking y theme.css
-    let gtk_css_paths = [
-        format!("{}/.config/gtk-4.0/gtk.css", home),
-        format!("{}/.config/malus-de/gtk-4.0/gtk.css", home),
-    ];
-    for gcss_str in &gtk_css_paths {
-        let gcss_path = PathBuf::from(gcss_str);
-        if gcss_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&gcss_path) {
-                if !content.contains("@import url(\"theme.css\");") {
-                    let updated = format!("@import url(\"theme.css\");\n{}", content);
-                    let _ = std::fs::write(&gcss_path, updated);
-                }
-            }
-        }
-    }
-
-    let theme_dirs = [
-        format!("{}/.themes/{}", home, theme_name),
-        format!("{}/.local/share/themes/{}", home, theme_name),
-        format!("/usr/share/themes/{}", theme_name),
-    ];
-
-    let mut gtk4_css_file: Option<PathBuf> = None;
-    let mut theme_gtk4_dir: Option<PathBuf> = None;
-
-    if theme_name != "Adwaita" {
-        for tdir_str in &theme_dirs {
-            let tdir = PathBuf::from(tdir_str);
-            let candidate_css = tdir.join("gtk-4.0/gtk.css");
-            if candidate_css.exists() {
-                gtk4_css_file = Some(candidate_css);
-                theme_gtk4_dir = Some(tdir.join("gtk-4.0"));
-                break;
-            }
-        }
-    }
-
-    let theme_css_paths = [
-        format!("{}/.config/gtk-4.0/theme.css", home),
-        format!("{}/.config/malus-de/gtk-4.0/theme.css", home),
-    ];
-
-    let gtk4_folders = [
-        format!("{}/.config/gtk-4.0", home),
-        format!("{}/.config/malus-de/gtk-4.0", home),
-    ];
-
-    if let (Some(css_file), Some(gtk4_dir)) = (gtk4_css_file, theme_gtk4_dir) {
-        let import_line = format!("@import url(\"{}\");\n", css_file.to_string_lossy());
-        for tpath_str in &theme_css_paths {
-            let _ = std::fs::write(tpath_str, &import_line);
-        }
-
-        // Crear enlaces simbólicos para assets y windows-assets si existen
-        for folder_str in &gtk4_folders {
-            let folder = PathBuf::from(folder_str);
-            let assets_src = gtk4_dir.join("assets");
-            let assets_dst = folder.join("assets");
-            if assets_dst.is_symlink() || assets_dst.exists() {
-                let _ = std::fs::remove_file(&assets_dst);
-            }
-            if assets_src.exists() {
-                let _ = std::os::unix::fs::symlink(&assets_src, &assets_dst);
-            }
-
-            let win_assets_src = gtk4_dir.join("windows-assets");
-            let win_assets_dst = folder.join("windows-assets");
-            if win_assets_dst.is_symlink() || win_assets_dst.exists() {
-                let _ = std::fs::remove_file(&win_assets_dst);
-            }
-            if win_assets_src.exists() {
-                let _ = std::os::unix::fs::symlink(&win_assets_src, &win_assets_dst);
-            }
-        }
-    } else {
-        // Modo Adwaita nativo: limpiar theme.css y enlaces simbólicos de assets
-        for tpath_str in &theme_css_paths {
-            let _ = std::fs::write(tpath_str, "/* Native Adwaita / Libadwaita theme */\n");
-        }
-        for folder_str in &gtk4_folders {
-            let folder = PathBuf::from(folder_str);
-            let assets_dst = folder.join("assets");
-            if assets_dst.is_symlink() {
-                let _ = std::fs::remove_file(&assets_dst);
-            }
-            let win_assets_dst = folder.join("windows-assets");
-            if win_assets_dst.is_symlink() {
-                let _ = std::fs::remove_file(&win_assets_dst);
-            }
-        }
-    }
-
-    // 5. Notificar recarga en caliente de CSS en GTK4 tocando los archivos
-    for gcss_str in &gtk_css_paths {
-        let _ = Command::new("touch").arg(gcss_str).status();
-    }
-
-    // 6. Armonizar modo claro / oscuro si el nombre del tema lo especifica
-    let is_dark = if theme_name.contains("Dark") || theme_name.contains("dark") {
-        set_system_appearance_mode(true);
-        true
-    } else if theme_name.contains("Light") || theme_name.contains("light") {
-        set_system_appearance_mode(false);
-        false
-    } else {
-        is_dark_mode_active()
-    };
-
-    // 7. Notificar a componentes del entorno Malus DE
-    let _ = IpcClient::send_command(IpcMessage::ThemeChanged {
-        theme_name: theme_name.to_string(),
-        is_dark,
-    });
+    let to_dark = theme_name.contains("Dark")
+        || theme_name.contains("dark")
+        || (!theme_name.contains("Light") && is_dark_mode_active());
+    set_system_appearance_mode(to_dark);
 }
 
 fn set_system_appearance_mode(to_dark: bool) {
@@ -2662,18 +2445,35 @@ fn set_system_appearance_mode(to_dark: bool) {
         .args(["set", "org.gnome.desktop.interface", "color-scheme", target])
         .status();
 
+    let _ = Command::new("gsettings")
+        .args(["set", "org.gnome.desktop.interface", "gtk-theme", "Adwaita"])
+        .status();
+
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let keyfile_path = PathBuf::from(&home).join(".config/malus-de/glib-2.0/settings/keyfile");
     if keyfile_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&keyfile_path) {
-            let replaced = if content.contains("color-scheme=") {
-                content
-                    .replace("color-scheme='prefer-light'", &format!("color-scheme='{}'", target))
-                    .replace("color-scheme='prefer-dark'", &format!("color-scheme='{}'", target))
-            } else {
-                content
-            };
-            let _ = std::fs::write(&keyfile_path, replaced);
+            let mut lines = Vec::new();
+            let mut found_color = false;
+            let mut found_theme = false;
+            for line in content.lines() {
+                if line.starts_with("color-scheme=") {
+                    lines.push(format!("color-scheme='{}'", target));
+                    found_color = true;
+                } else if line.starts_with("gtk-theme=") {
+                    lines.push("gtk-theme='Adwaita'".to_string());
+                    found_theme = true;
+                } else {
+                    lines.push(line.to_string());
+                }
+            }
+            if !found_color {
+                lines.push(format!("color-scheme='{}'", target));
+            }
+            if !found_theme {
+                lines.push("gtk-theme='Adwaita'".to_string());
+            }
+            let _ = std::fs::write(&keyfile_path, lines.join("\n") + "\n");
         }
     }
 
@@ -2687,25 +2487,81 @@ fn set_system_appearance_mode(to_dark: bool) {
 
     for path_str in &ini_paths {
         let path = PathBuf::from(path_str);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         if path.exists() {
             if let Ok(content) = std::fs::read_to_string(&path) {
                 let mut lines: Vec<String> = Vec::new();
-                let mut found = false;
+                let mut found_dark = false;
+                let mut found_theme = false;
                 for line in content.lines() {
                     if line.starts_with("gtk-application-prefer-dark-theme=") {
                         lines.push(format!("gtk-application-prefer-dark-theme={}", dark_val));
-                        found = true;
+                        found_dark = true;
+                    } else if line.starts_with("gtk-theme-name=") {
+                        lines.push("gtk-theme-name=Adwaita".to_string());
+                        found_theme = true;
                     } else {
                         lines.push(line.to_string());
                     }
                 }
-                if !found {
+                if !found_dark {
                     lines.push(format!("gtk-application-prefer-dark-theme={}", dark_val));
+                }
+                if !found_theme {
+                    lines.push("gtk-theme-name=Adwaita".to_string());
                 }
                 let _ = std::fs::write(&path, lines.join("\n") + "\n");
             }
+        } else {
+            let (cursor_theme, cursor_sz) = get_current_cursor_config();
+            let content = format!(
+                "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme={}\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-theme-name=Adwaita\n",
+                dark_val, cursor_theme, cursor_sz
+            );
+            let _ = std::fs::write(&path, content);
         }
     }
+
+    // Actualizar hojas de estilo nativas Adwaita macOS
+    let light_css = malus_de_common::config::get_malus_gtk_css(false);
+    let dark_css = malus_de_common::config::get_malus_gtk_css(true);
+
+    let gtk3_paths = [
+        format!("{}/.config/gtk-3.0/gtk.css", home),
+        format!("{}/.config/malus-de/gtk-3.0/gtk.css", home),
+    ];
+    for p in &gtk3_paths {
+        let _ = std::fs::write(p, if to_dark { &dark_css } else { &light_css });
+    }
+
+    let gtk4_css_paths = [
+        format!("{}/.config/gtk-4.0/gtk.css", home),
+        format!("{}/.config/malus-de/gtk-4.0/gtk.css", home),
+    ];
+    for p in &gtk4_css_paths {
+        let _ = std::fs::write(p, &light_css);
+    }
+
+    let gtk4_dark_paths = [
+        format!("{}/.config/gtk-4.0/gtk-dark.css", home),
+        format!("{}/.config/malus-de/gtk-4.0/gtk-dark.css", home),
+    ];
+    for p in &gtk4_dark_paths {
+        let _ = std::fs::write(p, &dark_css);
+    }
+
+    // Sincronizar controles en navegadores (Firefox y Brave)
+    malus_de_common::config::configure_browsers_traffic_lights(&home);
+
+    // Notificar recarga en caliente tocando los archivos
+    for p in gtk4_css_paths.iter().chain(gtk4_dark_paths.iter()) {
+        let _ = Command::new("touch").arg(p).status();
+    }
+
+    // Limpieza suave de Nautilus
+    let _ = Command::new("nautilus").arg("-q").status();
 
     libadwaita::StyleManager::default().set_color_scheme(
         if to_dark {
@@ -2715,9 +2571,8 @@ fn set_system_appearance_mode(to_dark: bool) {
         }
     );
 
-    let cur_theme = get_current_gtk_theme();
     let _ = IpcClient::send_command(IpcMessage::ThemeChanged {
-        theme_name: cur_theme,
+        theme_name: if to_dark { "Adwaita-Dark".to_string() } else { "Adwaita-Light".to_string() },
         is_dark: to_dark,
     });
 }

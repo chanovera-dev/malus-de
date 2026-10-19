@@ -57,9 +57,10 @@ if [ -f "$HOME/.config/malus-de/lib/libmalus_gtk_layout.so" ]; then
     export LD_PRELOAD="$HOME/.config/malus-de/lib/libmalus_gtk_layout.so"
 fi
 
-# Asegurar archivos de configuración aislados de GNOME
+# Asegurar archivos de configuración aislados de GNOME (respetando elecciones previas del usuario)
 mkdir -p "$XDG_CONFIG_HOME/glib-2.0/settings" "$XDG_CONFIG_HOME/gtk-3.0" "$XDG_CONFIG_HOME/gtk-4.0"
 
+if [ ! -f "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile" ]; then
 cat << 'EOF' > "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile"
 [org/gnome/desktop/wm/preferences]
 button-layout='close,minimize,maximize:'
@@ -68,29 +69,43 @@ button-layout='close,minimize,maximize:'
 color-scheme='prefer-light'
 cursor-theme='macOS'
 cursor-size=24
+gtk-theme='Adwaita'
 
 [org/gnome/settings-daemon/plugins/xsettings]
 overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
 EOF
+fi
 
+if [ ! -f "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" ]; then
 cat << 'EOF' > "$XDG_CONFIG_HOME/gtk-3.0/settings.ini"
 [Settings]
 gtk-decoration-layout=close,minimize,maximize:
 gtk-application-prefer-dark-theme=0
 gtk-cursor-theme-name=macOS
 gtk-cursor-theme-size=24
+gtk-theme-name=Adwaita
 EOF
+fi
 
+if [ ! -f "$XDG_CONFIG_HOME/gtk-4.0/settings.ini" ]; then
 cat << 'EOF' > "$XDG_CONFIG_HOME/gtk-4.0/settings.ini"
 [Settings]
 gtk-decoration-layout=close,minimize,maximize:
 gtk-application-prefer-dark-theme=0
 gtk-cursor-theme-name=macOS
 gtk-cursor-theme-size=24
+gtk-theme-name=Adwaita
 EOF
+fi
 
 # Sincronizar variables iniciales con el daemon de activación D-Bus
 dbus-update-activation-environment --all 2>/dev/null || true
+
+# Activar target de sesión gráfica de systemd para que los portales (xdg-desktop-portal) funcionen
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE XDG_CONFIG_HOME 2>/dev/null || true
+    systemctl --user start malus-session.target 2>/dev/null || true
+fi
 
 # ------------------------------------------------------------------------------
 # Limpieza de procesos previos de sesiones anteriores
