@@ -23,7 +23,8 @@ window.malus-topbar decoration {
     font-size: 13.5px;
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     font-weight: 500;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 4px rgba(0, 0, 0, 0.65);
+    -gtk-icon-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 4px rgba(0, 0, 0, 0.65);
 }
 
 .topbar-content {
@@ -80,7 +81,8 @@ label.clock-label {
     box-shadow: none;
     outline: none;
     transition: background-color 100ms ease;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 4px rgba(0, 0, 0, 0.65);
+    -gtk-icon-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 4px rgba(0, 0, 0, 0.65);
 }
 
 button.topbar-btn:hover,
@@ -107,6 +109,15 @@ menubutton > button:checked {
     padding: 3px 8px;
 }
 
+.topbar-content image,
+.apple-icon,
+.apple-logo-btn image,
+button.topbar-btn image,
+menubutton.topbar-btn image {
+    -gtk-icon-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 4px rgba(0, 0, 0, 0.65);
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.80));
+}
+
 .apple-icon {
     margin-top: -1px;
 }
@@ -116,20 +127,20 @@ menubutton > button:checked {
     color: #ffffff;
     padding-left: 2px;
     padding-right: 4px;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.40);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.90), 0 0 4px rgba(0, 0, 0, 0.70);
 }
 
 .global-menu-item {
     font-weight: 500;
     color: #f4f4f5;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 4px rgba(0, 0, 0, 0.65);
 }
 
 .clock-label {
     font-variant-numeric: tabular-nums;
     font-weight: 600;
     color: #ffffff;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.40);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 4px rgba(0, 0, 0, 0.65);
 }
 
 .active-pill {
