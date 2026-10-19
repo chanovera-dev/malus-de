@@ -74,16 +74,29 @@ cp -f "$SCRIPT_DIR/malus-session" "/usr/local/bin/malus-session"
 chmod 755 "/usr/local/bin/malus-session"
 echo "   ✔ /usr/local/bin/malus-session"
 
-# 4. Instalar entrada de sesión Wayland para GDM
-echo "🖥️ [4/5] Instalando archivo de sesión para GDM en /usr/share/wayland-sessions/..."
+# 4. Instalar target de systemd para gestión de sesión gráfica y portales
+echo "⚙️ [4/6] Instalando malus-session.target para systemd..."
+mkdir -p /usr/lib/systemd/user
+cat << 'EOF' > /usr/lib/systemd/user/malus-session.target
+[Unit]
+Description=Malus DE Session
+BindsTo=graphical-session.target
+Wants=graphical-session.target
+After=graphical-session-pre.target
+EOF
+chmod 644 /usr/lib/systemd/user/malus-session.target
+echo "   ✔ /usr/lib/systemd/user/malus-session.target"
+
+# 5. Instalar entrada de sesión Wayland para GDM
+echo "🖥️ [5/6] Instalando archivo de sesión para GDM en /usr/share/wayland-sessions/..."
 mkdir -p /usr/share/wayland-sessions
 
 cp -f "$SCRIPT_DIR/malus.desktop" "/usr/share/wayland-sessions/malus.desktop"
 chmod 644 "/usr/share/wayland-sessions/malus.desktop"
 echo "   ✔ /usr/share/wayland-sessions/malus.desktop"
 
-# 5. Parchear controles de ventana en aplicaciones Electron instaladas
-echo "🎨 [5/5] Integrando controles macOS en aplicaciones Electron (VS Code, Antigravity)..."
+# 6. Parchear controles de ventana en aplicaciones Electron instaladas
+echo "🎨 [6/6] Integrando controles macOS en aplicaciones Electron (VS Code, Antigravity)..."
 if [ -f "$SCRIPT_DIR/patch-electron-apps.sh" ]; then
     bash "$SCRIPT_DIR/patch-electron-apps.sh" || true
 fi

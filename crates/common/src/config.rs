@@ -617,6 +617,16 @@ void adw_window_title_set_title(void *self, const char *title) {
     // 7. Configuración automática de controles semáforo macOS para Firefox y Brave
     configure_browsers_traffic_lights(&home);
 
+    // 8. Asegurar malus-session.target para que xdg-desktop-portal se active en el session manager
+    let systemd_user_dir = PathBuf::from(&home).join(".config/systemd/user");
+    if let Ok(()) = std::fs::create_dir_all(&systemd_user_dir) {
+        let target_path = systemd_user_dir.join("malus-session.target");
+        if !target_path.exists() {
+            let target_content = "[Unit]\nDescription=Malus DE Session\nBindsTo=graphical-session.target\nWants=graphical-session.target\nAfter=graphical-session-pre.target\n";
+            let _ = std::fs::write(&target_path, target_content);
+        }
+    }
+
     // Exportar variables en el entorno del proceso actual
     std::env::set_var("XDG_CONFIG_HOME", &malus_config_dir);
     std::env::set_var("GSETTINGS_BACKEND", "keyfile");
