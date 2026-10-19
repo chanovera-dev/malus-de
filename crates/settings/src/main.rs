@@ -2541,7 +2541,7 @@ fn set_system_appearance_mode(to_dark: bool) {
         format!("{}/.config/malus-de/gtk-4.0/gtk.css", home),
     ];
     for p in &gtk4_css_paths {
-        let _ = std::fs::write(p, &light_css);
+        let _ = std::fs::write(p, if to_dark { &dark_css } else { &light_css });
     }
 
     let gtk4_dark_paths = [
@@ -2559,9 +2559,6 @@ fn set_system_appearance_mode(to_dark: bool) {
     for p in gtk4_css_paths.iter().chain(gtk4_dark_paths.iter()) {
         let _ = Command::new("touch").arg(p).status();
     }
-
-    // Limpieza suave de Nautilus
-    let _ = Command::new("nautilus").arg("-q").status();
 
     libadwaita::StyleManager::default().set_color_scheme(
         if to_dark {
